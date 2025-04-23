@@ -28,25 +28,75 @@ impl ExampleScene for ImageScene {
     fn render(&mut self, scene: &mut Scene, root_transform: Affine) {
         scene.set_transform(
             root_transform
-                * Affine::translate((640.0, 100.0))
+                * Affine::translate((200.0, 50.0))
                 * Affine::rotate(PI / 4.0)
-                * Affine::scale(1.5),
+                * Affine::scale(0.5),
         );
-        // scene.set_transform(root_transform * Affine::skew(2.0, 1.0));
-        // scene.set_transform(root_transform * Affine::translate((640.0, 300.0)));
+        scene.set_paint(Image {
+            pixmap: self.image_data.clone(),
+            x_extend: Extend::Pad,
+            y_extend: Extend::Pad,
+            quality: ImageQuality::Low,
+            transform: Affine::translate((0.0, 0.0)),
+        });
+        scene.fill_rect(&Rect::new(0.0, 0.0, 640.0, 480.0));
+
+        scene.set_transform(
+            root_transform
+                * Affine::translate((500.0, 50.0))
+                * Affine::skew(0.5, 0.5)
+                * Affine::scale(0.5),
+        );
+        scene.fill_rect(&Rect::new(0.0, 0.0, 640.0, 480.0));
+
+        scene.set_transform(root_transform * Affine::translate((0.0, 600.0)));
+        let path = heart_shape();
+        scene.fill_path(&path);
+
+        scene.set_transform(
+            root_transform
+                * Affine::translate((700.0, 600.0))
+                * Affine::rotate(PI / 4.0)
+                * Affine::scale(0.5),
+        );
         scene.set_paint(Image {
             pixmap: self.image_data.clone(),
             x_extend: Extend::Repeat,
             y_extend: Extend::Repeat,
             quality: ImageQuality::Low,
-            transform: Affine::translate((0.0, 0.0)),
+            transform: Affine::scale(0.25),
         });
-
         scene.fill_rect(&Rect::new(0.0, 0.0, 640.0, 480.0));
-        // scene.fill_rect(&Rect::new(640.0, 480.0, 1600.0, 1280.0));
-        // let path = heart_shape();
-        // scene.fill_path(&path);
-        // scene.fill_rect(&Rect::new(0.0, 0.0, 640.0, 480.0));
+
+        scene.set_transform(root_transform * Affine::translate((1000.0, 50.0)));
+        scene.set_paint(Image {
+            pixmap: self.image_data.clone(),
+            x_extend: Extend::Repeat,
+            y_extend: Extend::Repeat,
+            quality: ImageQuality::Low,
+            transform: Affine::scale(0.25),
+        });
+        scene.fill_rect(&Rect::new(0.0, 0.0, 640.0, 480.0));
+
+        scene.set_transform(root_transform * Affine::translate((1000.0, 600.0)));
+        scene.set_paint(Image {
+            pixmap: self.image_data.clone(),
+            x_extend: Extend::Reflect,
+            y_extend: Extend::Repeat,
+            quality: ImageQuality::Low,
+            transform: Affine::scale(0.25),
+        });
+        scene.fill_rect(&Rect::new(0.0, 0.0, 640.0, 480.0));
+
+        scene.set_transform(root_transform * Affine::translate((1000.0, 1200.0)));
+        scene.set_paint(Image {
+            pixmap: self.image_data.clone(),
+            x_extend: Extend::Pad,
+            y_extend: Extend::Repeat,
+            quality: ImageQuality::Low,
+            transform: Affine::scale(0.25),
+        });
+        scene.fill_rect(&Rect::new(0.0, 0.0, 640.0, 480.0));
     }
 }
 
