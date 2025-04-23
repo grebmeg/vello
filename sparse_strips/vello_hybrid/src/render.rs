@@ -120,12 +120,14 @@ pub struct GpuStrip {
     pub width: u16,
     /// Width of the portion where alpha blending should be applied.
     pub dense_width: u16,
+    /// Column index
+    pub col_idx: u32,
     /// Paint type: 0 = solid, 1 = alpha, 2 = image
     pub paint_type: u32,
-    /// Paint index
-    pub paint_index: u32,
     /// Paint data
     pub paint_data: u32,
+    /// Paint index
+    pub uv: u32,
     /// Paint x_advance
     pub x_advance: [f32; 2],
     /// Paint y_advance
@@ -134,15 +136,16 @@ pub struct GpuStrip {
 
 impl GpuStrip {
     /// Vertex attributes for the strip
-    pub fn vertex_attributes() -> [wgpu::VertexAttribute; 7] {
+    pub fn vertex_attributes() -> [wgpu::VertexAttribute; 8] {
         wgpu::vertex_attr_array![
             0 => Uint32,
             1 => Uint32,
             2 => Uint32,
             3 => Uint32,
             4 => Uint32,
-            5 => Float32x2,
+            5 => Uint32,
             6 => Float32x2,
+            7 => Float32x2,
         ]
     }
 }

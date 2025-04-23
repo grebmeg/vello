@@ -244,9 +244,10 @@ impl Scene {
                         y: wide_tile_y,
                         width: WideTile::WIDTH,
                         dense_width: 0,
+                        col_idx: 0,
                         paint_type: 0,
-                        paint_index: 0,
                         paint_data: bg,
+                        uv: 0,
                         x_advance: [0.0, 0.0],
                         y_advance: [0.0, 0.0],
                     });
@@ -256,21 +257,19 @@ impl Scene {
                         vello_common::coarse::Cmd::Fill(cmd) => {
                             let strip_x = wide_tile_x + cmd.x;
                             let strip_y = wide_tile_y;
+                            let alpha_col = 0;
 
-                            let (paint_type, paint_index, paint_data, x_advance, y_advance) =
+                            let (col_idx, paint_type, paint_data, uv, x_advance, y_advance) =
                                 match &cmd.paint {
                                     Paint::Solid(color) => {
-                                        let col = 0;
                                         let rgba = color.to_u32();
-                                        (0, col, rgba, [0.0, 0.0], [0.0, 0.0])
+                                        (alpha_col, 0, rgba, 0, [0.0, 0.0], [0.0, 0.0])
                                     }
                                     Paint::Indexed(indexed_paint) => {
-                                        if let Some(encoded_paint) =
-                                            self.encoded_paints.get(indexed_paint.index())
-                                        {
-                                            if let EncodedPaint::Image(encoded_image) =
-                                                encoded_paint
-                                            {
+                                        let encoded_paint =
+                                            self.encoded_paints.get(indexed_paint.index());
+                                        match encoded_paint {
+                                            Some(EncodedPaint::Image(encoded_image)) => {
                                                 let start_p = encoded_image.transform
                                                     * Point::new(strip_x as f64, strip_y as f64);
                                                 let u0 = start_p.x as u16;
@@ -280,17 +279,15 @@ impl Scene {
                                                 let x_advance = encoded_image.x_advance;
                                                 let y_advance = encoded_image.y_advance;
                                                 (
+                                                    alpha_col,
                                                     2,
-                                                    pack_u16s_to_u32(u0, v0),
                                                     pack_u16s_to_u32(extend_x, extend_y),
+                                                    pack_u16s_to_u32(u0, v0),
                                                     [x_advance.x as f32, x_advance.y as f32],
                                                     [y_advance.x as f32, y_advance.y as f32],
                                                 )
-                                            } else {
-                                                (0, 0, 0, [0.0, 0.0], [0.0, 0.0])
                                             }
-                                        } else {
-                                            (0, 0, 0, [0.0, 0.0], [0.0, 0.0])
+                                            _ => (0, 0, 0, 0, [0.0, 0.0], [0.0, 0.0]),
                                         }
                                     }
                                     _ => unimplemented!("unsupported paint type: {:?}", cmd.paint),
@@ -301,9 +298,10 @@ impl Scene {
                                 y: strip_y,
                                 width: cmd.width,
                                 dense_width: 0,
+                                col_idx,
                                 paint_type,
-                                paint_index,
                                 paint_data,
+                                uv,
                                 x_advance,
                                 y_advance,
                             });
@@ -312,45 +310,41 @@ impl Scene {
                             let strip_x = wide_tile_x + cmd.x;
                             let strip_y = wide_tile_y;
 
-                            let (paint_type, paint_index, paint_data, x_advance, y_advance) =
+                            // msg is a variable here to work around rustfmt failure
+                            let msg = "GpuStrip fields use u16 and values are expected to fit within that range";
+                            let alpha_col = (cmd.alpha_idx / usize::from(Tile::HEIGHT))
+                                .try_into()
+                                .expect(msg);
+
+                            let (col_idx, paint_type, paint_data, uv, x_advance, y_advance) =
                                 match &cmd.paint {
                                     Paint::Solid(color) => {
-                                        // msg is a variable here to work around rustfmt failure
-                                        let msg = "GpuStrip fields use u16 and values are expected to fit within that range";
-                                        let alpha_col = (cmd.alpha_idx / usize::from(Tile::HEIGHT))
-                                            .try_into()
-                                            .expect(msg);
-
                                         let rgba = color.to_u32();
-                                        (1, alpha_col, rgba, [0.0, 0.0], [0.0, 0.0])
+                                        (alpha_col, 1, rgba, 0, [0.0, 0.0], [0.0, 0.0])
                                     }
                                     Paint::Indexed(indexed_paint) => {
-                                        if let Some(encoded_paint) =
-                                            self.encoded_paints.get(indexed_paint.index())
-                                        {
-                                            if let EncodedPaint::Image(encoded_image) =
-                                                encoded_paint
-                                            {
+                                        let encoded_paint =
+                                            self.encoded_paints.get(indexed_paint.index());
+                                        match encoded_paint {
+                                            Some(EncodedPaint::Image(encoded_image)) => {
                                                 let start_p = encoded_image.transform
                                                     * Point::new(strip_x as f64, strip_y as f64);
-                                                let sample_x = start_p.x as u16;
-                                                let sample_y = start_p.y as u16;
+                                                let u0 = start_p.x as u16;
+                                                let v0 = start_p.y as u16;
                                                 let extend_x = encoded_image.extends.0 as u16;
                                                 let extend_y = encoded_image.extends.1 as u16;
                                                 let x_advance = encoded_image.x_advance;
                                                 let y_advance = encoded_image.y_advance;
                                                 (
+                                                    alpha_col,
                                                     2,
-                                                    pack_u16s_to_u32(sample_x, sample_y),
                                                     pack_u16s_to_u32(extend_x, extend_y),
+                                                    pack_u16s_to_u32(u0, v0),
                                                     [x_advance.x as f32, x_advance.y as f32],
                                                     [y_advance.x as f32, y_advance.y as f32],
                                                 )
-                                            } else {
-                                                (0, 0, 0, [0.0, 0.0], [0.0, 0.0])
                                             }
-                                        } else {
-                                            (0, 0, 0, [0.0, 0.0], [0.0, 0.0])
+                                            _ => (alpha_col, 0, 0, 0, [0.0, 0.0], [0.0, 0.0]),
                                         }
                                     }
                                     _ => unimplemented!("unsupported paint type: {:?}", cmd.paint),
@@ -361,9 +355,10 @@ impl Scene {
                                 y: strip_y,
                                 width: cmd.width,
                                 dense_width: cmd.width,
+                                col_idx,
                                 paint_type,
-                                paint_index,
                                 paint_data,
+                                uv,
                                 x_advance,
                                 y_advance,
                             });
