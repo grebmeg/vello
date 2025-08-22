@@ -5,12 +5,14 @@
 
 use crate::renderer::Renderer;
 use crate::util::{circular_star, crossed_line_star, miter_stroke_2};
+use smallvec::SmallVec;
 use std::f64::consts::PI;
 use vello_common::color::palette::css::{
     BEIGE, BLUE, DARK_BLUE, GREEN, LIME, MAROON, REBECCA_PURPLE, RED, TRANSPARENT,
 };
 use vello_common::kurbo::{Affine, BezPath, Circle, Join, Point, Rect, Shape, Stroke};
 use vello_common::peniko::Fill;
+use vello_cpu::kurbo::Cap;
 use vello_dev_macros::vello_test;
 
 #[vello_test(width = 8, height = 8)]
@@ -413,4 +415,23 @@ fn no_anti_aliasing_clip_path(ctx: &mut impl Renderer) {
     ctx.set_paint(REBECCA_PURPLE);
     ctx.fill_rect(&rect);
     ctx.pop_layer();
+}
+
+#[vello_test(width = 120, height = 120)]
+fn stroke_dash_pattern_issue(ctx: &mut impl Renderer) {
+    let rect = Rect::new(0.0, 0.0, 80.0, 80.0);
+
+    ctx.set_transform(Affine::translate((20.0, 20.0)));
+    ctx.set_paint(REBECCA_PURPLE);
+    ctx.set_stroke(Stroke {
+        width: 20.0,
+        join: Join::Miter,
+        miter_limit: 4.0,
+        start_cap: Cap::Butt,
+        end_cap: Cap::Butt,
+        dash_offset: 0.0,
+        dash_pattern: SmallVec::from_vec(vec![73.0, 12.0]),
+    });
+
+    ctx.stroke_rect(&rect);
 }

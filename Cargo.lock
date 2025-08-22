@@ -1737,23 +1737,22 @@ dependencies = [
 [[package]]
 name = "kurbo"
 version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c62026ae44756f8a599ba21140f350303d4f08dcdcc71b5ad9c9bb8128c13c62"
-dependencies = [
- "arrayvec",
- "euclid",
- "smallvec",
-]
-
-[[package]]
-name = "kurbo"
-version = "0.11.3"
 source = "git+https://github.com/linebender/kurbo.git?rev=1312d43a6ef78e3eaea6e2209e942d9426766f04#1312d43a6ef78e3eaea6e2209e942d9426766f04"
 dependencies = [
  "arrayvec",
  "euclid",
  "libm",
  "schemars",
+ "smallvec",
+]
+
+[[package]]
+name = "kurbo"
+version = "0.11.3"
+source = "git+https://github.com/grebmeg/kurbo.git?rev=9352f6ad518c164c98eb5e03db50b2f405c0d733#9352f6ad518c164c98eb5e03db50b2f405c0d733"
+dependencies = [
+ "arrayvec",
+ "euclid",
  "smallvec",
 ]
 
@@ -2513,7 +2512,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f9529efd019889b2a205193c14ffb6e2839b54ed9d2720674f10f4b04d87ac9"
 dependencies = [
  "color",
- "kurbo 0.11.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "kurbo 0.11.3 (git+https://github.com/grebmeg/kurbo.git?rev=9352f6ad518c164c98eb5e03db50b2f405c0d733)",
  "smallvec",
 ]
 
@@ -3290,7 +3289,7 @@ version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68c7541fff44b35860c1a7a47a7cadf3e4a304c457b58f9870d9706ece028afc"
 dependencies = [
- "kurbo 0.11.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "kurbo 0.11.3 (git+https://github.com/grebmeg/kurbo.git?rev=9352f6ad518c164c98eb5e03db50b2f405c0d733)",
  "siphasher",
 ]
 
@@ -3663,7 +3662,7 @@ dependencies = [
  "flate2",
  "fontdb",
  "imagesize",
- "kurbo 0.11.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "kurbo 0.11.3 (git+https://github.com/grebmeg/kurbo.git?rev=9352f6ad518c164c98eb5e03db50b2f405c0d733)",
  "log",
  "pico-args",
  "roxmltree",

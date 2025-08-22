@@ -151,3 +151,6 @@ once_cell = "1.21.3"
 proc-macro2 = "1.0.95"
 syn = { version = "2.0.101", features = ["full", "extra-traits"] }
 quote = "1.0.40"
+
+[patch.crates-io]
+kurbo = { git = "https://github.com/grebmeg/kurbo.git", rev = "9352f6ad518c164c98eb5e03db50b2f405c0d733", default-features = false }
