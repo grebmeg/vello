@@ -1748,7 +1748,7 @@ dependencies = [
 [[package]]
 name = "kurbo"
 version = "0.11.3"
-source = "git+https://github.com/grebmeg/kurbo.git?rev=11e06c506ee11dc56f8444f173e642633edec59c#11e06c506ee11dc56f8444f173e642633edec59c"
+source = "git+https://github.com/grebmeg/kurbo.git?rev=bf71b406877920fdb2d996079f71adc71e332764#bf71b406877920fdb2d996079f71adc71e332764"
 dependencies = [
  "arrayvec",
  "euclid",
@@ -2520,11 +2520,11 @@ dependencies = [
 [[package]]
 name = "peniko"
 version = "0.4.0"
-source = "git+https://github.com/grebmeg/peniko.git?rev=dd8d99d307abef5db52f9dda3cd2e886ce56a5e6#dd8d99d307abef5db52f9dda3cd2e886ce56a5e6"
+source = "git+https://github.com/grebmeg/peniko.git?rev=9f93ce5050855fe51c1cccf0ffc74830a08b09d9#9f93ce5050855fe51c1cccf0ffc74830a08b09d9"
 dependencies = [
  "bytemuck",
  "color",
- "kurbo 0.11.3 (git+https://github.com/grebmeg/kurbo.git?rev=11e06c506ee11dc56f8444f173e642633edec59c)",
+ "kurbo 0.11.3 (git+https://github.com/grebmeg/kurbo.git?rev=bf71b406877920fdb2d996079f71adc71e332764)",
  "smallvec",
 ]
 
@@ -3698,7 +3698,7 @@ dependencies = [
  "bytemuck",
  "futures-intrusive",
  "log",
- "peniko 0.4.0 (git+https://github.com/grebmeg/peniko.git?rev=dd8d99d307abef5db52f9dda3cd2e886ce56a5e6)",
+ "peniko 0.4.0 (git+https://github.com/grebmeg/peniko.git?rev=9f93ce5050855fe51c1cccf0ffc74830a08b09d9)",
  "png",
  "skrifa",
  "static_assertions",
@@ -3714,7 +3714,7 @@ name = "vello_api"
 version = "0.5.0"
 dependencies = [
  "bytemuck",
- "peniko 0.4.0 (git+https://github.com/grebmeg/peniko.git?rev=dd8d99d307abef5db52f9dda3cd2e886ce56a5e6)",
+ "peniko 0.4.0 (git+https://github.com/grebmeg/peniko.git?rev=9f93ce5050855fe51c1cccf0ffc74830a08b09d9)",
  "png",
 ]
 
@@ -3739,7 +3739,7 @@ dependencies = [
  "fearless_simd",
  "libm",
  "log",
- "peniko 0.4.0 (git+https://github.com/grebmeg/peniko.git?rev=dd8d99d307abef5db52f9dda3cd2e886ce56a5e6)",
+ "peniko 0.4.0 (git+https://github.com/grebmeg/peniko.git?rev=9f93ce5050855fe51c1cccf0ffc74830a08b09d9)",
  "png",
  "roxmltree",
  "skrifa",
@@ -3774,7 +3774,7 @@ version = "0.5.0"
 dependencies = [
  "bytemuck",
  "guillotiere",
- "peniko 0.4.0 (git+https://github.com/grebmeg/peniko.git?rev=dd8d99d307abef5db52f9dda3cd2e886ce56a5e6)",
+ "peniko 0.4.0 (git+https://github.com/grebmeg/peniko.git?rev=9f93ce5050855fe51c1cccf0ffc74830a08b09d9)",
  "skrifa",
  "smallvec",
 ]
@@ -4928,7 +4928,7 @@ dependencies = [
  "env_logger",
  "getrandom",
  "jni",
- "kurbo 0.11.3 (git+https://github.com/grebmeg/kurbo.git?rev=11e06c506ee11dc56f8444f173e642633edec59c)",
+ "kurbo 0.11.3 (git+https://github.com/grebmeg/kurbo.git?rev=bf71b406877920fdb2d996079f71adc71e332764)",
  "log",
  "notify-debouncer-full",
  "pollster",
