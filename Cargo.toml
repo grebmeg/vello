@@ -104,9 +104,11 @@ skrifa = { version = "0.31.0", default-features = false, features = ["autohint_s
 # with the version of kurbo used by peniko.
 # See: https://github.com/linebender/peniko/compare/main...taj-p:peniko:tajp/fastStroke (uses Kurbo main)
 peniko = { git = "https://github.com/taj-p/peniko.git", rev = "2b0a17d1805d3dd4cac255365a600609272ed4b3", default-features = false }
+# peniko = { git = "https://github.com/grebmeg/peniko.git", rev = "77958516324865f9aa471281f18c9517537ee5fc", default-features = false }
 # FIXME: This can be removed once peniko supports the schemars feature.
 # Kurbo main.
 kurbo = { git = "https://github.com/linebender/kurbo.git", rev = "1312d43a6ef78e3eaea6e2209e942d9426766f04", default-features = false }
+# kurbo = { git = "https://github.com/grebmeg/kurbo.git", rev = "9352f6ad518c164c98eb5e03db50b2f405c0d733", default-features = false }
 futures-intrusive = "0.5.0"
 smallvec = "1.15.1"
 static_assertions = "1.1.0"
@@ -152,5 +154,5 @@ proc-macro2 = "1.0.95"
 syn = { version = "2.0.101", features = ["full", "extra-traits"] }
 quote = "1.0.40"
 
-[patch.crates-io]
+[patch."https://github.com/linebender/kurbo.git"]
 kurbo = { git = "https://github.com/grebmeg/kurbo.git", rev = "9352f6ad518c164c98eb5e03db50b2f405c0d733", default-features = false }
