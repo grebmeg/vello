@@ -9,13 +9,85 @@ use vello_common::color::AlphaColor;
 use vello_common::color::palette::css::{
     PURPLE, REBECCA_PURPLE, ROYAL_BLUE, SEA_GREEN, TOMATO, VIOLET, WHITE,
 };
-use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
+use vello_common::filter_effects::{
+    BoundsExpansion, EdgeMode, Filter, FilterFunction, FilterGraph, FilterPrimitive,
+};
 use vello_common::kurbo::{Affine, BezPath, Circle, Point, Rect, Shape};
 use vello_common::mask::Mask;
 use vello_common::peniko::{BlendMode, Compose, Mix};
 use vello_common::pixmap::Pixmap;
 use vello_cpu::RenderContext;
 use vello_dev_macros::vello_test;
+
+#[test]
+fn filter_blur_function_matches_primitive() {
+    let primitive = FilterPrimitive::GaussianBlur {
+        std_deviation: 3.0,
+        edge_mode: EdgeMode::None,
+    };
+
+    let expected = Filter::from_primitive(primitive.clone());
+    let from_function = Filter::from_function(FilterFunction::Blur { radius: 3.0 });
+
+    assert_eq!(from_function, expected);
+    assert_eq!(from_function.bounds_expansion(), BoundsExpansion::uniform(9));
+}
+
+#[test]
+fn filter_gaussian_blur_bounds_round_up() {
+    let filter = Filter::from_primitive(FilterPrimitive::GaussianBlur {
+        std_deviation: 2.1,
+        edge_mode: EdgeMode::None,
+    });
+
+    assert_eq!(filter.bounds_expansion(), BoundsExpansion::uniform(7));
+}
+
+#[test]
+fn filter_drop_shadow_bounds_expand_by_offset() {
+    let filter = Filter::from_primitive(FilterPrimitive::DropShadow {
+        dx: -4.5,
+        dy: 3.25,
+        std_deviation: 1.5,
+        color: AlphaColor::from_rgba8(0, 0, 0, 180),
+        edge_mode: EdgeMode::None,
+    });
+
+    assert_eq!(
+        filter.bounds_expansion(),
+        BoundsExpansion {
+            left: 9,
+            top: 5,
+            right: 5,
+            bottom: 8,
+        }
+    );
+}
+
+#[test]
+fn filter_flood_has_no_bounds_expansion() {
+    let filter = Filter::from_primitive(FilterPrimitive::Flood { color: WHITE });
+
+    assert_eq!(filter.bounds_expansion(), BoundsExpansion::zero());
+}
+
+#[test]
+fn filter_graph_tracks_largest_expansion() {
+    let mut graph = FilterGraph::new();
+    let small = FilterPrimitive::GaussianBlur {
+        std_deviation: 1.0,
+        edge_mode: EdgeMode::None,
+    };
+    let large = FilterPrimitive::GaussianBlur {
+        std_deviation: 4.0,
+        edge_mode: EdgeMode::None,
+    };
+
+    graph.add(small.clone(), None);
+    graph.add(large.clone(), None);
+
+    assert_eq!(graph.bounds_expansion(), large.bounds_expansion());
+}
 
 /// Test flood filter filling a star shape with solid color using a mask.
 ///
