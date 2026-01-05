@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use crate::data::get_data_items;
-use criterion::Criterion;
+use criterion::{BatchSize, Criterion};
 use vello_common::fearless_simd::Level;
 use vello_common::peniko::Fill;
 
@@ -34,6 +34,52 @@ pub fn render_strips(c: &mut Criterion) {
                     );
                     std::hint::black_box((&strip_buf, &alpha_buf));
                 })
+            });
+        };
+    }
+
+    for item in get_data_items() {
+        // Commenting this out by default since SIMD is what we care about most.
+        // strip_single!(item, Level::fallback(), "fallback");
+        let simd_level = Level::new();
+        if !matches!(simd_level, Level::Fallback(_)) {
+            strip_single!(item, simd_level, "simd");
+        }
+    }
+}
+
+/// Benchmark strip rendering in a "first render" configuration.
+///
+/// This intentionally starts with empty output buffers (capacity == 0) each iteration, so we
+/// measure the cost of growing `strip_buf`/`alpha_buf` during `strip::render_impl` (and thus any
+/// effect from internal `reserve()` calls).
+pub fn render_strips_first_render(c: &mut Criterion) {
+    let mut g = c.benchmark_group("render_strips_first_render");
+    g.sample_size(50);
+
+    macro_rules! strip_single {
+        ($item:expr, $level:expr, $suffix:expr) => {
+            let lines = $item.lines();
+            let tiles = $item.sorted_tiles();
+
+            g.bench_function(format!("{}_{}", $item.name.clone(), $suffix), |b| {
+                b.iter_batched(
+                    || (Vec::new(), Vec::new()),
+                    |(mut strip_buf, mut alpha_buf)| {
+                        vello_common::strip::render(
+                            $level,
+                            &tiles,
+                            &mut strip_buf,
+                            &mut alpha_buf,
+                            Fill::NonZero,
+                            None,
+                            &lines,
+                        );
+                        std::hint::black_box((&strip_buf, &alpha_buf));
+                        (strip_buf, alpha_buf)
+                    },
+                    BatchSize::SmallInput,
+                )
             });
         };
     }
