@@ -116,6 +116,18 @@ fn render_impl<S: Simd>(
         return;
     }
 
+    // Pre-allocate output buffers.
+    //
+    // `alpha_buf` gets one 16-byte (u8x16) column written each time we advance to a new tile
+    // *location* (x,y). The number of unique locations is <= tiles.len(), so this is a safe upper
+    // bound (we may over-reserve if many tiles share the same location).
+    //
+    // `strip_buf` grows roughly with the number of locations/row transitions; reserving ~tiles.len()
+    // keeps reallocations out of the hot loop.
+    let tiles_len = tiles.len() as usize;
+    alpha_buf.reserve(tiles_len.saturating_mul(16));
+    strip_buf.reserve(tiles_len.saturating_add(8));
+
     let should_fill = |winding: i32| match fill_rule {
         Fill::NonZero => winding != 0,
         Fill::EvenOdd => winding % 2 != 0,
