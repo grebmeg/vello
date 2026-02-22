@@ -187,7 +187,7 @@ impl EncodeExt for Gradient {
         // command before starting with the rendering.
         // First we need to account for the base transform of the shader, then
         // we account for the fact that we sample in the center of a pixel and not in the corner by
-        // adding 0.5.
+        // adding `PIXEL_CENTER_OFFSET`.
         // Finally, we need to apply the _inverse_ paint transform to the point so that we can account
         // for the paint transform of the render context.
         let transform = base_transform
@@ -491,9 +491,10 @@ impl EncodeExt for Image {
             sampler.quality = ImageQuality::Low;
         }
 
-        // Similarly to gradients, apply a 0.5 offset so we sample at the center of
+        // Similarly to gradients, apply the `PIXEL_CENTER_OFFSET` offset so we sample at the center of
         // a pixel.
-        let transform = transform.inverse() * Affine::translate((0.5, 0.5));
+        let transform =
+            transform.inverse() * Affine::translate((PIXEL_CENTER_OFFSET, PIXEL_CENTER_OFFSET));
 
         let (x_advance, y_advance) = x_y_advances(&transform);
 
@@ -953,7 +954,7 @@ impl FromF32Color for u8 {
 
     fn from_f32<S: Simd>(mut color: f32x4<S>) -> [Self; 4] {
         let simd = color.simd;
-        color = color.madd(f32x4::splat(simd, 255.0), f32x4::splat(simd, 0.5));
+        color = color.mul_add(f32x4::splat(simd, 255.0), f32x4::splat(simd, 0.5));
 
         [
             color[0] as Self,
@@ -1008,11 +1009,11 @@ impl<T: FromF32Color> GradientLut<T> {
             let scales = f32x16::block_splat(f32x4::from_slice(simd, &range.scale));
 
             ramp_range.clone().step_by(4).for_each(|idx| {
-                let t_vals = f32x4::splat(simd, idx as f32).madd(inv_lut_scale, add_factor);
+                let t_vals = f32x4::splat(simd, idx as f32).mul_add(inv_lut_scale, add_factor);
 
                 let t_vals = element_wise_splat(simd, t_vals);
 
-                let mut result = scales.madd(t_vals, biases);
+                let mut result = scales.mul_add(t_vals, biases);
                 let alphas = result.splat_4th();
                 // Premultiply colors, since we did interpolation in unpremultiplied space.
                 if range.interpolation_alpha_space == InterpolationAlphaSpace::Unpremultiplied {

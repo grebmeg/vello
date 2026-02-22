@@ -4,12 +4,19 @@
 //! Tests for GitHub issues.
 
 use crate::renderer::Renderer;
+use std::sync::Arc;
+use vello_api::peniko::color::palette::css::{PURPLE, ROYAL_BLUE, TOMATO};
+use vello_common::color::PremulRgba8;
 use vello_common::color::palette::css::{DARK_BLUE, LIME, REBECCA_PURPLE};
+use vello_common::filter_effects::{Filter, FilterPrimitive};
 use vello_common::kurbo::{Affine, BezPath, Rect, Shape, Stroke};
-use vello_common::peniko::{Color, ColorStop, Fill, Gradient, InterpolationAlphaSpace};
+use vello_common::paint::Image;
+use vello_common::peniko::{
+    Color, ColorStop, Fill, Gradient, ImageQuality, ImageSampler, InterpolationAlphaSpace,
+};
 use vello_common::pixmap::Pixmap;
 use vello_cpu::color::palette::css::{BLACK, RED};
-use vello_cpu::peniko::Compose;
+use vello_cpu::peniko::{Compose, Extend};
 use vello_cpu::{Level, RenderContext, RenderMode, RenderSettings};
 use vello_dev_macros::vello_test;
 
@@ -405,7 +412,7 @@ fn gradient_color_alpha_unmul(ctx: &mut impl Renderer) {
 #[test]
 fn multi_threading_oob_access() {
     let settings = RenderSettings {
-        level: Level::try_detect().unwrap_or(Level::fallback()),
+        level: Level::try_detect().unwrap_or(Level::baseline()),
         num_threads: 4,
         render_mode: RenderMode::OptimizeQuality,
     };
@@ -456,4 +463,93 @@ fn basic_alpha_compositing(ctx: &mut impl Renderer) {
 #[vello_test(no_ref)]
 fn large_dimensions(ctx: &mut impl Renderer) {
     ctx.fill_rect(&Rect::new(0.0, 0.0, u16::MAX as f64 + 10.0, 8.0));
+}
+
+#[vello_test(skip_multithreaded, skip_hybrid)]
+fn issue_1417(ctx: &mut impl Renderer) {
+    let filter_drop_shadow = Filter::from_primitive(FilterPrimitive::Offset { dx: 0.0, dy: 0.0 });
+
+    // Unfortunately, I was unable to reduce it further... There are two issues at play:
+    // 1) We were erroneously exiting eagerly in `pop_clip` in case the clip path has zero
+    // strips, causing `push_clip` and `pop_clip` to not be symmetrical.
+    // 2) We were not properly resetting `n_zero_clips` in Wide, meaning that the issue only
+    // comes into play when rendering 1+ frame (hence the for loop).
+    for _ in 0..2 {
+        let start = 20.0;
+        let size = 60.0;
+
+        let rect = Rect::from_points((start, start), (start + size, start + size));
+        {
+            ctx.push_layer(
+                Some(&rect.to_path(0.1)),
+                None,
+                None,
+                None,
+                Some(filter_drop_shadow.clone()),
+            );
+            ctx.push_layer(None, None, None, None, None);
+            ctx.set_paint(PURPLE);
+            ctx.fill_rect(&rect);
+            ctx.pop_layer();
+            ctx.pop_layer();
+        }
+
+        let start = 100.0;
+        let size = 4.0;
+
+        let rect = Rect::from_points((start, start), (start + size, start + size));
+        {
+            ctx.push_layer(
+                Some(&rect.to_path(0.1)),
+                None,
+                None,
+                None,
+                Some(filter_drop_shadow.clone()),
+            );
+            ctx.set_paint(ROYAL_BLUE);
+            ctx.fill_rect(&rect);
+            ctx.pop_layer();
+        }
+    }
+}
+
+#[vello_test(skip_hybrid, skip_multithreaded)]
+fn issue_1421(ctx: &mut impl Renderer) {
+    let filter_flood = Filter::from_primitive(FilterPrimitive::Flood { color: TOMATO });
+    let rect = Rect::new(15.0, 15.0, 85.0, 85.0).to_path(0.1);
+
+    ctx.push_layer(Some(&rect), None, None, None, Some(filter_flood));
+    ctx.set_paint(REBECCA_PURPLE);
+    ctx.fill_path(&rect);
+    ctx.pop_layer();
+}
+
+#[vello_test(width = 4, height = 4)]
+fn issue_1433(ctx: &mut impl Renderer) {
+    let r = PremulRgba8::from_u8_array([255, 0, 0, 255]);
+    let b = PremulRgba8::from_u8_array([0, 0, 0, 0]);
+
+    // Three red rows, one transparent row.
+    #[rustfmt::skip]
+    let image = vec![
+        r, r, r, r,
+        r, r, r, r,
+        r, r, r, r,
+        b, b, b, b
+    ];
+
+    let pixmap = Pixmap::from_parts(image, 4, 4);
+    let source = ctx.get_image_source(Arc::new(pixmap));
+    let image = Image {
+        image: source,
+        sampler: ImageSampler {
+            x_extend: Extend::Pad,
+            y_extend: Extend::Pad,
+            quality: ImageQuality::Low,
+            alpha: 1.0,
+        },
+    };
+
+    ctx.set_paint(image);
+    ctx.fill_rect(&Rect::new(0.0, 0.0, 4.0, 4.0));
 }

@@ -15,9 +15,17 @@ You can find its changes [documented below](#006---2026-01-15).
 
 This release has an [MSRV][] of 1.88.
 
+### Added
+
+- Added `composite_to_pixmap_at_offset` method to `RenderContext` for compositing at specific offsets within a larger pixmap, enabling spritesheet/atlas support. ([#1416][] by [@grebmeg][])
+
 ### Changed
 
 - Improve performance of bilinear image sampling in the `RenderMode::OptimizeQuality` (`f32`) pipeline. ([#1343][] by [@tomcur][])
+
+### Fixed
+
+- Fixed rendering of blurred rounded rectangles with zero or very small blur standard deviations. ([#1422][] by [@tomcur][])
 
 ## [0.0.6][] - 2026-01-15
 
@@ -99,6 +107,7 @@ See also the [vello_common 0.0.1](../vello_common/CHANGELOG.md#001---2025-05-10)
 [@grebmeg]: https://github.com/grebmeg
 [@LaurenzV]: https://github.com/LaurenzV
 [@nicoburns]: https://github.com/nicoburns
+[@tomcur]: https://github.com/tomcur
 [@waywardmonkeys]: https://github.com/waywardmonkeys
 
 [#1159]: https://github.com/linebender/vello/pull/1159
@@ -108,11 +117,13 @@ See also the [vello_common 0.0.1](../vello_common/CHANGELOG.md#001---2025-05-10)
 [#1294]: https://github.com/linebender/vello/pull/1294
 [#1327]: https://github.com/linebender/vello/pull/1327
 [#1335]: https://github.com/linebender/vello/pull/1335
+[#1416]: https://github.com/linebender/vello/pull/1416
 [#1343]: https://github.com/linebender/vello/pull/1343
 [#1349]: https://github.com/linebender/vello/pull/1349
 [#1351]: https://github.com/linebender/vello/pull/1351
 [#1353]: https://github.com/linebender/vello/pull/1353
 [#1354]: https://github.com/linebender/vello/pull/1354
+[#1422]: https://github.com/linebender/vello/pull/1422
 
 [Unreleased]: https://github.com/linebender/vello/compare/sparse-strips-v0.0.6...HEAD
 [0.0.6]: https://github.com/linebender/vello/compare/sparse-strips-v0.0.5...sparse-strips-v0.0.6

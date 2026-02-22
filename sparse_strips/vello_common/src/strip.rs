@@ -103,6 +103,7 @@ pub fn render(
     dispatch!(level, simd => render_impl(simd, tiles, strip_buf, alpha_buf, fill_rule, aliasing_threshold, lines));
 }
 
+#[inline(always)]
 fn render_impl<S: Simd>(
     s: S,
     tiles: &Tiles,
@@ -169,7 +170,7 @@ fn render_impl<S: Simd>(
                     for x in 0..Tile::WIDTH as usize {
                         let area = location_winding[x];
                         let coverage = area.abs();
-                        let mulled = coverage.madd(p2, p1);
+                        let mulled = coverage.mul_add(p2, p1);
                         // Note that we are not storing the location winding here but the actual
                         // alpha value as f32, so we reuse the variable as a temporary storage.
                         // Also note that we need the `min` here because the winding can be > 1
@@ -185,9 +186,9 @@ fn render_impl<S: Simd>(
                     #[expect(clippy::needless_range_loop, reason = "dimension clarity")]
                     for x in 0..Tile::WIDTH as usize {
                         let area = location_winding[x];
-                        let im1 = area.madd(p1, p1).floor();
-                        let coverage = p2.madd(im1, area).abs();
-                        let mulled = p3.madd(coverage, p1);
+                        let im1 = area.mul_add(p1, p1).floor();
+                        let coverage = p2.mul_add(im1, area).abs();
+                        let mulled = p3.mul_add(coverage, p1);
                         // TODO: It is possible that, unlike for `NonZero`, we don't need the `min`
                         // here.
                         location_winding[x] = mulled.min(p3);
@@ -346,9 +347,10 @@ fn render_impl<S: Simd>(
             let ymin = px_top_y.max(ymin);
             let ymax = px_bottom_y.min(ymax);
             let h = (ymax - ymin).max(0.0);
-            accumulated_winding = h.madd(sign, accumulated_winding);
+            accumulated_winding = h.mul_add(sign, accumulated_winding);
             for x_idx in 0..Tile::WIDTH {
-                location_winding[x_idx as usize] = h.madd(sign, location_winding[x_idx as usize]);
+                location_winding[x_idx as usize] =
+                    h.mul_add(sign, location_winding[x_idx as usize]);
             }
 
             if line_right_x < 0. {
@@ -360,9 +362,12 @@ fn render_impl<S: Simd>(
         let line_top_y = f32x4::splat(s, line_top_y);
         let line_bottom_y = f32x4::splat(s, line_bottom_y);
 
-        let y_idx = f32x4::from_slice(s, &[0.0, 1.0, 2.0, 3.0]);
-        let px_top_y = y_idx;
-        let px_bottom_y = 1. + y_idx;
+        // See the explanation of this term on the `line_px_left_yx` and `line_px_right_yx`
+        // variables below.
+        let line_px_base_yx = line_top_y.mul_add(-x_slope, line_top_x);
+
+        let px_top_y = f32x4::simd_from(s, [0., 1., 2., 3.]);
+        let px_bottom_y = 1. + px_top_y;
 
         let ymin = line_top_y.max(px_top_y);
         let ymax = line_bottom_y.min(px_bottom_y);
@@ -390,28 +395,44 @@ fn render_impl<S: Simd>(
             // x-position (collinear), the line belongs to the pixel on whose _left_ edge it is
             // situated. The resulting slope calculation for the edge the line is situated on
             // will be NaN, as `0 * inf` results in NaN. This is true for both the left and
-            // right edge. In both cases, the call to `f32::max` will set this to `ymin`.
+            // right edge.
+            //
+            // We know `ymin` and `ymax` are finite. We require the `max` operation to pick `ymin`
+            // if its first operand is NaN. Under a strict reading of `fearless_simd`'s `max` and
+            // `max_precise` semantics, that requires using `max_precise`, which chooses the
+            // non-NaN operand (regardless of whether it's the first or second). For `min`, we then
+            // know both operands are finite, so we can use the relaxed version.
             let line_px_left_y = (px_left_x - line_top_x)
-                .madd(y_slope, line_top_y)
+                .mul_add(y_slope, line_top_y)
                 .max_precise(ymin)
-                .min_precise(ymax);
+                .min(ymax);
             let line_px_right_y = (px_right_x - line_top_x)
-                .madd(y_slope, line_top_y)
+                .mul_add(y_slope, line_top_y)
                 .max_precise(ymin)
-                .min_precise(ymax);
+                .min(ymax);
 
-            // `x_slope` is always finite, as horizontal geometry is elided.
-            let line_px_left_yx =
-                (line_px_left_y - line_top_y).madd(x_slope, f32x4::splat(s, line_top_x));
-            let line_px_right_yx =
-                (line_px_right_y - line_top_y).madd(x_slope, f32x4::splat(s, line_top_x));
+            // For each pixel we calculate the x-coordinates of the left- and rightmost points on
+            // the line segment within that pixel. We do this based on the y-offsets of those two
+            // points from the top of the line. This can be calculated as, e.g.,
+            // `(line_px_left_y - line_top_y) * x_slope + line_top_x`.
+            //
+            // Rather than calculating that y-offset twice for each pixel within the loop through
+            // subtracting from the points' y-coordinates, we get rid of that subtraction by baking
+            // it into the algebraic "base" x-coordinate `line_px_base_yx` calculated above the
+            // loop. When adding that term to `y * x_slope` it gives the x-coordinate of the point
+            // along the line.
+            //
+            // Note `x_slope` is always finite, as horizontal geometry is elided.
+            let line_px_left_yx = line_px_left_y.mul_add(x_slope, line_px_base_yx);
+            let line_px_right_yx = line_px_right_y.mul_add(x_slope, line_px_base_yx);
             let h = (line_px_right_y - line_px_left_y).abs();
 
             // The trapezoidal area enclosed between the line and the right edge of the pixel
-            // square.
-            let area = 0.5 * h * (2. * px_right_x - line_px_right_yx - line_px_left_yx);
-            location_winding[x_idx as usize] += area.madd(sign, acc);
-            acc = h.madd(sign, acc);
+            // square. More straightforwardly written as follows, but the `madd` is faster.
+            // 0.5 * h * (2. * px_right_x - line_px_right_yx - line_px_left_yx).
+            let area = h * (line_px_right_yx + line_px_left_yx).mul_add(-0.5, px_right_x);
+            location_winding[x_idx as usize] += area.mul_add(sign, acc);
+            acc = h.mul_add(sign, acc);
         }
 
         accumulated_winding += acc;

@@ -259,7 +259,7 @@ impl<S: Simd, const QUALITY: u8> Iterator for FilteredImagePainter<'_, S, QUALIT
                         let color_sample = sample(x_positions, y_positions);
                         let w = element_wise_splat(self.simd, cx[x_idx] * cy[y_idx]);
 
-                        interpolated_color = w.madd(color_sample, interpolated_color);
+                        interpolated_color = w.mul_add(color_sample, interpolated_color);
                     }
                 }
 
@@ -299,7 +299,7 @@ impl<S: Simd, const QUALITY: u8> Iterator for FilteredImagePainter<'_, S, QUALIT
                         let color_sample = sample(x_positions, y_positions);
                         let w = element_wise_splat(self.simd, cx[x_idx] * cy[y_idx]);
 
-                        interpolated_color = w.madd(color_sample, interpolated_color);
+                        interpolated_color = w.mul_add(color_sample, interpolated_color);
                     }
                 }
 
@@ -423,17 +423,14 @@ pub(crate) fn extend<S: Simd>(
     max: f32x4<S>,
     inv_max: f32x4<S>,
 ) -> f32x4<S> {
-    // We cannot chose f32::EPSILON here because for example 30.0 - f32::EPSILON is still 30.0.
-    // This bias should be large enough for all numbers that we support (i.e. <= u16::MAX).
-    let bias = f32x4::splat(simd, 0.01);
-
     match extend {
-        // Note that max should be exclusive, so subtract a small bias to enforce that.
-        // Otherwise, we might sample out-of-bounds pixels.
-        crate::peniko::Extend::Pad => val.min(max - bias).max(f32x4::splat(simd, 0.0)),
+        // Note that max should be exclusive, so subtract one to enforce that.
+        // Since the maximum image dimensions we support is u16::MAX, subtracting 1 in f32
+        // is enough to ensure that all numbers are subtracted correctly.
+        crate::peniko::Extend::Pad => val.min(max - 1.0).max(f32x4::splat(simd, 0.0)),
         crate::peniko::Extend::Repeat => {
             // floor := (val * inv_max).floor() * max is the nearest multiple of `max` below val.
-            max.madd(-(val * inv_max).floor(), val)
+            max.mul_add(-(val * inv_max).floor(), val)
                 // In certain edge cases, we might still end up with a higher number.
                 .min(max - 1.0)
         }
@@ -510,7 +507,7 @@ fn single_weight<S: Simd>(
     c: f32x4<S>,
     d: f32x4<S>,
 ) -> f32x4<S> {
-    t.madd(d, c).madd(t, b).madd(t, a)
+    t.mul_add(d, c).mul_add(t, b).mul_add(t, a)
 }
 
 /// Mitchell filter with the variables B = 1/3 and C = 1/3.

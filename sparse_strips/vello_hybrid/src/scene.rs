@@ -5,15 +5,19 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cell::RefCell;
 use vello_common::clip::ClipContext;
 use vello_common::coarse::{MODE_HYBRID, Wide};
 use vello_common::encode::{EncodeExt, EncodedPaint};
 use vello_common::fearless_simd::Level;
 use vello_common::filter_effects::Filter;
+#[cfg(feature = "text")]
 use vello_common::glyph::{GlyphCaches, GlyphRenderer, GlyphRunBuilder, GlyphType, PreparedGlyph};
 use vello_common::kurbo::{Affine, BezPath, Cap, Join, Rect, Shape, Stroke};
 use vello_common::mask::Mask;
+use vello_common::multi_atlas::AtlasConfig;
 use vello_common::paint::{Paint, PaintType};
+#[cfg(feature = "text")]
 use vello_common::peniko::FontData;
 use vello_common::peniko::color::palette::css::BLACK;
 use vello_common::peniko::{BlendMode, Compose, Fill, Mix};
@@ -21,8 +25,6 @@ use vello_common::recording::{PushLayerCommand, Recordable, Recorder, Recording,
 use vello_common::render_graph::RenderGraph;
 use vello_common::strip::Strip;
 use vello_common::strip_generator::{GenerationMode, StripGenerator, StripStorage};
-
-use crate::AtlasConfig;
 
 /// Default tolerance for curve flattening
 pub(crate) const DEFAULT_TOLERANCE: f64 = 0.1;
@@ -49,7 +51,7 @@ pub struct RenderSettings {
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
-            level: Level::try_detect().unwrap_or(Level::fallback()),
+            level: Level::try_detect().unwrap_or(Level::baseline()),
             atlas_config: AtlasConfig::default(),
         }
     }
@@ -107,8 +109,9 @@ pub struct Scene {
     /// Generator for converting paths to strips.
     pub(crate) strip_generator: StripGenerator,
     /// Storage for generated strips and alpha values.
-    pub(crate) strip_storage: StripStorage,
+    pub(crate) strip_storage: RefCell<StripStorage>,
     /// Cache for rasterized glyphs to improve text rendering performance.
+    #[cfg(feature = "text")]
     pub(crate) glyph_caches: Option<GlyphCaches>,
     /// Dependency graph for managing layer rendering order and filter effects.
     pub(crate) render_graph: RenderGraph,
@@ -136,10 +139,11 @@ impl Scene {
             paint_visible: true,
             stroke: render_state.stroke,
             strip_generator: StripGenerator::new(width, height, settings.level),
-            strip_storage: StripStorage::default(),
+            strip_storage: RefCell::new(StripStorage::default()),
             transform: render_state.transform,
             fill_rule: render_state.fill_rule,
             blend_mode: render_state.blend_mode,
+            #[cfg(feature = "text")]
             glyph_caches: Some(GlyphCaches::default()),
             render_graph,
         }
@@ -220,16 +224,17 @@ impl Scene {
         aliasing_threshold: Option<u8>,
     ) {
         let wide = &mut self.wide;
+        let strip_storage = &mut self.strip_storage.borrow_mut();
         self.strip_generator.generate_filled_path(
             path,
             fill_rule,
             transform,
             aliasing_threshold,
-            &mut self.strip_storage,
+            strip_storage,
             self.clip_context.get(),
         );
         wide.generate(
-            &self.strip_storage.strips,
+            &strip_storage.strips,
             paint,
             self.blend_mode,
             0,
@@ -284,18 +289,19 @@ impl Scene {
         aliasing_threshold: Option<u8>,
     ) {
         let wide = &mut self.wide;
+        let strip_storage = &mut self.strip_storage.borrow_mut();
 
         self.strip_generator.generate_stroked_path(
             path,
             &self.stroke,
             transform,
             aliasing_threshold,
-            &mut self.strip_storage,
+            strip_storage,
             self.clip_context.get(),
         );
 
         wide.generate(
-            &self.strip_storage.strips,
+            &strip_storage.strips,
             paint,
             self.blend_mode,
             0,
@@ -330,6 +336,7 @@ impl Scene {
     }
 
     /// Creates a builder for drawing a run of glyphs that have the same attributes.
+    #[cfg(feature = "text")]
     pub fn glyph_run(&mut self, font: &FontData) -> GlyphRunBuilder<'_, Self> {
         GlyphRunBuilder::new(font.clone(), self.transform, self)
     }
@@ -350,17 +357,19 @@ impl Scene {
             unimplemented!("Filter effects are not yet supported in vello_hybrid");
         }
 
+        let mut strip_storage = self.strip_storage.borrow_mut();
+
         let clip = if let Some(c) = clip_path {
             self.strip_generator.generate_filled_path(
                 c,
                 self.fill_rule,
                 self.transform,
                 self.aliasing_threshold,
-                &mut self.strip_storage,
+                &mut strip_storage,
                 self.clip_context.get(),
             );
 
-            Some(self.strip_storage.strips.as_slice())
+            Some(strip_storage.strips.as_slice())
         } else {
             None
         };
@@ -389,6 +398,23 @@ impl Scene {
     /// example for how this method differs from `push_clip_path`.
     pub fn push_clip_layer(&mut self, path: &BezPath) {
         self.push_layer(Some(path), None, None, None, None);
+    }
+
+    /// Push a new blend layer.
+    pub fn push_blend_layer(&mut self, blend_mode: BlendMode) {
+        self.push_layer(None, Some(blend_mode), None, None, None);
+    }
+
+    /// Push a new opacity layer.
+    pub fn push_opacity_layer(&mut self, opacity: f32) {
+        self.push_layer(None, None, Some(opacity), None, None);
+    }
+
+    /// Push a new mask layer.
+    ///
+    /// Note that masks are not yet supported in `vello_hybrid`.
+    pub fn push_mask_layer(&mut self, mask: Mask) {
+        self.push_layer(None, None, None, Some(mask), None);
     }
 
     /// Push a new filter layer.
@@ -469,7 +495,7 @@ impl Scene {
         self.wide.reset();
         self.strip_generator.reset();
         self.clip_context.reset();
-        self.strip_storage.clear();
+        self.strip_storage.borrow_mut().clear();
         self.encoded_paints.clear();
 
         let render_state = Self::default_render_state();
@@ -480,6 +506,7 @@ impl Scene {
         self.stroke = render_state.stroke;
         self.blend_mode = render_state.blend_mode;
 
+        #[cfg(feature = "text")]
         self.glyph_caches.as_mut().unwrap().maintain();
     }
 
@@ -494,6 +521,7 @@ impl Scene {
     }
 }
 
+#[cfg(feature = "text")]
 impl GlyphRenderer for Scene {
     fn fill_glyph(&mut self, prepared_glyph: PreparedGlyph<'_>) {
         match prepared_glyph.glyph_type {
@@ -542,9 +570,17 @@ impl Recordable for Scene {
     where
         F: FnOnce(&mut Recorder<'_>),
     {
-        let mut recorder = Recorder::new(recording, self.transform, self.take_glyph_caches());
+        let mut recorder = Recorder::new(
+            recording,
+            self.transform,
+            #[cfg(feature = "text")]
+            self.take_glyph_caches(),
+        );
         f(&mut recorder);
-        self.glyph_caches = Some(recorder.take_glyph_caches());
+        #[cfg(feature = "text")]
+        {
+            self.glyph_caches = Some(recorder.take_glyph_caches());
+        }
     }
 
     fn prepare_recording(&mut self, recording: &mut Recording) {
@@ -568,9 +604,16 @@ impl Recordable for Scene {
                 RenderCommand::FillPath(_)
                 | RenderCommand::StrokePath(_)
                 | RenderCommand::FillRect(_)
-                | RenderCommand::StrokeRect(_)
-                | RenderCommand::FillOutlineGlyph(_)
-                | RenderCommand::StrokeOutlineGlyph(_) => {
+                | RenderCommand::StrokeRect(_) => {
+                    self.process_geometry_command(
+                        strip_start_indices,
+                        range_index,
+                        &adjusted_strips,
+                    );
+                    range_index += 1;
+                }
+                #[cfg(feature = "text")]
+                RenderCommand::FillOutlineGlyph(_) | RenderCommand::StrokeOutlineGlyph(_) => {
                     self.process_geometry_command(
                         strip_start_indices,
                         range_index,
@@ -693,6 +736,7 @@ impl Scene {
                     );
                     strip_start_indices.push(start_index);
                 }
+                #[cfg(feature = "text")]
                 RenderCommand::FillOutlineGlyph((path, glyph_transform)) => {
                     self.strip_generator.generate_filled_path(
                         path,
@@ -704,6 +748,7 @@ impl Scene {
                     );
                     strip_start_indices.push(start_index);
                 }
+                #[cfg(feature = "text")]
                 RenderCommand::StrokeOutlineGlyph((path, glyph_transform)) => {
                     self.strip_generator.generate_stroked_path(
                         path,
@@ -781,10 +826,11 @@ impl Scene {
         cached_strips: &[Strip],
         cached_alphas: &[u8],
     ) -> Vec<Strip> {
+        let mut strip_storage = self.strip_storage.borrow_mut();
         // Calculate offset for alpha indices based on current buffer size.
-        let alpha_offset = self.strip_storage.alphas.len() as u32;
+        let alpha_offset = strip_storage.alphas.len() as u32;
         // Extend current alpha buffer with cached alphas.
-        self.strip_storage.alphas.extend(cached_alphas);
+        strip_storage.alphas.extend(cached_alphas);
         // Create adjusted strips with corrected alpha indices
         cached_strips
             .iter()

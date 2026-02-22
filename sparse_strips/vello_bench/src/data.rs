@@ -86,6 +86,8 @@ impl DataItem {
                 path.transform,
                 &mut temp_buf,
                 &mut FlattenCtx::default(),
+                self.width,
+                self.height,
             );
             line_buf.extend(&temp_buf);
         }
@@ -103,6 +105,8 @@ impl DataItem {
                 &mut temp_buf,
                 &mut FlattenCtx::default(),
                 &mut StrokeCtx::default(),
+                self.width,
+                self.height,
             );
             line_buf.extend(&temp_buf);
         }
@@ -152,7 +156,7 @@ impl DataItem {
         let tiles = self.sorted_tiles();
 
         strip::render(
-            Level::fallback(),
+            Level::baseline(),
             &tiles,
             &mut strip_buf,
             &mut alpha_buf,

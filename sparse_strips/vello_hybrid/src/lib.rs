@@ -24,6 +24,7 @@
 //!
 //! - `wgpu` (enabled by default): Enables the GPU rendering backend via wgpu and includes the required sparse shaders.
 //! - `wgpu_default` (enabled by default): Enables wgpu with its default hardware backends (such as Vulkan, Metal, and DX12).
+//! - `text` (enabled by default): Enables glyph rendering ([`Scene::glyph_run`]).
 //! - `webgl`: Enables the WebGL rendering backend for browser support, using GLSL shaders for compatibility.
 //!
 //! If you need to customize the set of enabled wgpu features, disable this crate's default features then enable its `wgpu` feature.
@@ -45,8 +46,6 @@
 extern crate alloc;
 
 mod gradient_cache;
-mod image_cache;
-mod multi_atlas;
 mod render;
 mod scene;
 #[cfg(any(feature = "webgl", feature = "wgpu"))]
@@ -55,7 +54,6 @@ mod schedule;
 pub mod api;
 pub mod util;
 
-pub use multi_atlas::{AllocationStrategy, AtlasConfig};
 #[cfg(feature = "wgpu")]
 pub use render::{AtlasWriter, RenderTargetConfig, Renderer};
 pub use render::{Config, GpuStrip, RenderSize};
@@ -63,6 +61,7 @@ pub use render::{Config, GpuStrip, RenderSize};
 pub use render::{WebGlAtlasWriter, WebGlRenderer, WebGlTextureWithDimensions};
 pub use scene::{RenderSettings, Scene};
 pub use util::DimensionConstraints;
+pub use vello_common::multi_atlas::{AllocationStrategy, AtlasConfig};
 pub use vello_common::pixmap::Pixmap;
 
 use thiserror::Error;

@@ -99,7 +99,7 @@ pub struct RenderSettings {
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
-            level: Level::try_detect().unwrap_or(Level::fallback()),
+            level: Level::try_detect().unwrap_or(Level::baseline()),
             #[cfg(feature = "multithreading")]
             num_threads: (std::thread::available_parallelism()
                 .unwrap()
@@ -273,7 +273,7 @@ impl RenderContext {
         self.temp_path.push(PathEl::ClosePath);
     }
 
-    /// Fill a blurred rectangle with the given radius and standard deviation.
+    /// Fill a blurred rectangle with the given corner radius and standard deviation.
     ///
     /// Note that this only works properly if the current paint is set to a solid color.
     /// If not, it will fall back to using black as the fill color.
@@ -591,6 +591,39 @@ impl RenderContext {
             width,
             height,
             self.render_settings.render_mode,
+        );
+    }
+
+    /// Composite the current context into a region of a pixmap.
+    ///
+    /// The context's content (sized `self.width × self.height`) is composited
+    /// directly to the destination pixmap starting at `(dst_x, dst_y)`.
+    /// If the region extends beyond the pixmap bounds, it is clipped.
+    ///
+    /// Unlike [`render_to_pixmap`](Self::render_to_pixmap), this method composites on top of
+    /// existing pixmap content rather than clearing it first, allowing multiple
+    /// renders to accumulate.
+    ///
+    /// This is useful for rendering individual elements (like glyphs) into
+    /// a spritesheet at specific coordinates.
+    ///
+    /// # Panics
+    ///
+    /// This method is only supported with the single-threaded dispatcher and will
+    /// **panic** if called on a `RenderContext` using the multi-threaded dispatcher.
+    pub fn composite_to_pixmap_at_offset(&self, pixmap: &mut Pixmap, dst_x: u16, dst_y: u16) {
+        let dst_buffer_width = pixmap.width();
+        let dst_buffer_height = pixmap.height();
+        self.dispatcher.composite_at_offset(
+            pixmap.data_as_u8_slice_mut(),
+            self.width,
+            self.height,
+            dst_x,
+            dst_y,
+            dst_buffer_width,
+            dst_buffer_height,
+            self.render_settings.render_mode,
+            &self.encoded_paints,
         );
     }
 
@@ -1154,7 +1187,7 @@ mod tests {
 
         let mut pixmap = Pixmap::new(200, 200);
         let settings = RenderSettings {
-            level: Level::try_detect().unwrap_or(Level::fallback()),
+            level: Level::try_detect().unwrap_or(Level::baseline()),
             num_threads: 1,
             render_mode: RenderMode::OptimizeQuality,
         };

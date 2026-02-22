@@ -324,6 +324,10 @@ impl<const MODE: u8> Wide<MODE> {
         for tile in &mut self.tiles {
             tile.bg = PremulColor::from_alpha_color(TRANSPARENT);
             tile.cmds.clear();
+            tile.n_zero_clip = 0;
+            tile.n_clip = 0;
+            tile.n_bufs = 0;
+            tile.in_clipped_filter_layer = false;
             tile.layer_ids.truncate(1);
             tile.layer_cmd_ranges.clear();
             tile.layer_cmd_ranges
@@ -709,6 +713,8 @@ impl<const MODE: u8> Wide<MODE> {
         let mut layer = self.layer_stack.pop().unwrap();
 
         if let Some(filter) = &layer.filter {
+            let mut final_bbox = WideTilesBbox::inverted();
+
             // Update render graph node with final bounding box
             if let Some(node_id) = self.filter_node_stack.pop() {
                 // Get the transform from the FilterLayer node and scale the expansion by it
@@ -728,7 +734,7 @@ impl<const MODE: u8> Wide<MODE> {
                         self.height_tiles(),
                     );
                     let clip_bbox = self.active_bbox();
-                    let final_bbox = expanded_bbox.intersect(clip_bbox);
+                    final_bbox = expanded_bbox.intersect(clip_bbox);
 
                         // Update both the local layer and the render graph node
                         layer.wtile_bbox = final_bbox;
@@ -741,8 +747,8 @@ impl<const MODE: u8> Wide<MODE> {
 
             // Generate filter commands for each tile (used for non-graph path rendering)
             // Apply filter BEFORE clipping (per SVG spec: filter → clip → mask → opacity → blend)
-            for x in 0..self.width_tiles() {
-                for y in 0..self.height_tiles() {
+            for x in final_bbox.x0()..final_bbox.x1() {
+                for y in final_bbox.y0()..final_bbox.y1() {
                     self.get_mut(x, y).filter(layer.layer_id, filter.clone());
                 }
             }
@@ -766,11 +772,20 @@ impl<const MODE: u8> Wide<MODE> {
                 for y in 0..self.height_tiles() {
                     let t = self.get_mut(x, y);
 
-                    if let Some(mask) = layer.mask.clone() {
-                        t.mask(mask);
+                    // Optimization: If no drawing happened since the last `PushBuf`, then we don't
+                    // need to do any masking or buffer-wide opacity work. The same holds for
+                    // blending, unless it is destructive blending.
+                    let has_draw_commands = !matches!(t.cmds.last().unwrap(), &Cmd::PushBuf(_));
+                    if has_draw_commands {
+                        if let Some(mask) = layer.mask.clone() {
+                            t.mask(mask);
+                        }
+                        t.opacity(layer.opacity);
                     }
-                    t.opacity(layer.opacity);
-                    t.blend(layer.blend_mode);
+                    if has_draw_commands || layer.blend_mode.is_destructive() {
+                        t.blend(layer.blend_mode);
+                    }
+
                     t.pop_buf();
                 }
             }
@@ -960,17 +975,21 @@ impl<const MODE: u8> Wide<MODE> {
         } = self.clip_stack.pop().unwrap();
         let n_strips = strips.len();
 
-        if n_strips == 0 {
-            return;
-        }
-
         // Compute base alpha index and create shared clip attributes
-        let alpha_base_idx = strips[0].alpha_idx();
+        // Note: It's possible that the clip-path has zero strips. However, we cannot exit early
+        // in this case because we need to potentially pop zero clips further below. Therefore,
+        // we simply use a dummy alpha index of 0 in this case.
         let clip_attrs_idx = self.attrs.clip.len() as u32;
-        self.attrs.clip.push(ClipAttrs {
-            thread_idx,
-            alpha_base_idx,
-        });
+        let alpha_base_idx;
+        if n_strips == 0 {
+            alpha_base_idx = 0;
+        } else {
+            alpha_base_idx = strips[0].alpha_idx();
+            self.attrs.clip.push(ClipAttrs {
+                thread_idx,
+                alpha_base_idx,
+            });
+        };
 
         let mut cur_wtile_x = clip_bbox.x0();
         let mut cur_wtile_y = clip_bbox.y0();
@@ -1407,7 +1426,7 @@ impl<const MODE: u8> WideTile<MODE> {
     /// - Regular layers: Use local `blend_buf` stack for temporary storage
     /// - Filtered layers: Materialized in persistent layer storage for filter processing
     /// - Clip layers: Special handling for clipping operations
-    pub fn push_buf(&mut self, layer_kind: LayerKind) {
+    fn push_buf(&mut self, layer_kind: LayerKind) {
         let top_layer = layer_kind.id();
         if matches!(layer_kind, LayerKind::Filtered(_)) {
             self.layer_cmd_ranges.insert(
@@ -1431,7 +1450,7 @@ impl<const MODE: u8> WideTile<MODE> {
     }
 
     /// Pop the most recent buffer.
-    pub fn pop_buf(&mut self) {
+    fn pop_buf(&mut self) {
         let top_layer = self.layer_ids.pop().unwrap();
         let mut next_layer = *self.layer_ids.last().unwrap();
 
@@ -1464,7 +1483,7 @@ impl<const MODE: u8> WideTile<MODE> {
     }
 
     /// Apply an opacity to the whole buffer.
-    pub fn opacity(&mut self, opacity: f32) {
+    fn opacity(&mut self, opacity: f32) {
         if opacity != 1.0 {
             self.cmds.push(Cmd::Opacity(opacity));
         }
@@ -1476,17 +1495,13 @@ impl<const MODE: u8> WideTile<MODE> {
     }
 
     /// Apply a mask to the whole buffer.
-    pub fn mask(&mut self, mask: Mask) {
+    fn mask(&mut self, mask: Mask) {
         self.cmds.push(Cmd::Mask(mask));
     }
 
     /// Blend the current buffer into the previous buffer in the stack.
-    pub fn blend(&mut self, blend_mode: BlendMode) {
-        // Optimization: If no drawing happened since the last `PushBuf` and the blend mode
-        // is not destructive, we do not need to do any blending at all.
-        if !matches!(self.cmds.last(), Some(&Cmd::PushBuf(_))) || blend_mode.is_destructive() {
-            self.cmds.push(Cmd::Blend(blend_mode));
-        }
+    fn blend(&mut self, blend_mode: BlendMode) {
+        self.cmds.push(Cmd::Blend(blend_mode));
     }
 }
 
@@ -1999,10 +2014,12 @@ mod tests {
 
         assert_eq!(wide.layer_stack.len(), 2);
         assert_eq!(wide.clip_stack.len(), 1);
+        assert_eq!(wide.tiles[0].n_bufs, 2);
 
         wide.reset();
 
         assert_eq!(wide.layer_stack.len(), 0);
         assert_eq!(wide.clip_stack.len(), 0);
+        assert_eq!(wide.tiles[0].n_bufs, 0);
     }
 }

@@ -5,7 +5,7 @@
 //! well as some code that was copied from kurbo, which is needed to reimplement the
 //! full `flatten` method.
 
-use crate::flatten::TOL_2;
+use crate::flatten::{SQRT_TOL, TOL, TOL_2};
 #[cfg(not(feature = "std"))]
 use crate::kurbo::common::FloatFuncs as _;
 use crate::kurbo::{CubicBez, Line, ParamCurve, ParamCurveNearest, PathEl, Point, QuadBez};
@@ -44,13 +44,16 @@ pub(crate) trait Callback {
 pub(crate) fn flatten<S: Simd>(
     simd: S,
     path: impl IntoIterator<Item = PathEl>,
-    tolerance: f64,
     callback: &mut impl Callback,
     flatten_ctx: &mut FlattenCtx,
+    width: u16,
+    height: u16,
 ) {
     flatten_ctx.flattened_cubics.clear();
 
-    let sqrt_tol = tolerance.sqrt();
+    let width = width as f64;
+    let height = height as f64;
+
     let mut closed = true;
     let mut start_pt = Point::ZERO;
     let mut last_pt = Point::ZERO;
@@ -74,11 +77,26 @@ pub(crate) fn flatten<S: Simd>(
             PathEl::QuadTo(p1, p2) => {
                 debug_assert!(!closed, "Expected a `MoveTo` before a `QuadTo`");
                 let p0 = last_pt;
-                // An upper bound on the shortest distance of any point on the quadratic Bezier
-                // curve to the line segment [p0, p2] is 1/2 of the control-point-to-line-segment
+                let line = Line::new(p0, p2);
+                // If the quadratic Bézier is fully to the right, top, or bottom of the viewport,
+                // it does not impact pixel coverage or winding. We can ignore it. The following
+                // checks that conservatively by checking whether the bounding box of the Bézier's
+                // control points is fully to the right, top, or bottom of the viewport.
+                if [p0, p1, p2].into_iter().all(|p| p.x > width)
+                    || [p0, p1, p2].into_iter().all(|p| p.y < 0.)
+                    || [p0, p1, p2].into_iter().all(|p| p.y > height)
+                {
+                    callback.callback(LinePathEl::MoveTo(p2));
+                }
+                // The following checks two things. First, if the quadratic Bézier is fully to the
+                // left of the viewport, it may affect pixel coverage and winding, but its exact
+                // shape does not matter. It can be emitted as a line segment [p0, p2].
+                //
+                // Second, an upper bound on the shortest distance of any point on the quadratic
+                // Bézier curve to the line segment [p0, p2] is 1/2 of the control-point-to-line-segment
                 // distance.
                 //
-                // The derivation is similar to that for the cubic Bezier (see below). In
+                // The derivation is similar to that for the cubic Bézier (see below). In
                 // short:
                 //
                 // q(t) = B0(t) p0 + B1(t) p1 + B2(t) p2
@@ -90,13 +108,14 @@ pub(crate) fn flatten<S: Simd>(
                 //
                 // The following takes the square to elide the square root of the Euclidean
                 // distance.
-                let line = Line::new(p0, p2);
-                if line.nearest(p1, 0.).distance_sq <= 4. * TOL_2 {
+                else if [p0, p1, p2].into_iter().all(|p| p.x < 0.)
+                    || line.nearest(p1, 0.).distance_sq <= 4. * TOL_2
+                {
                     callback.callback(LinePathEl::LineTo(p2));
                 } else {
                     let q = QuadBez::new(p0, p1, p2);
-                    let params = q.estimate_subdiv(sqrt_tol);
-                    let n = ((0.5 * params.val / sqrt_tol).ceil() as usize).max(1);
+                    let params = q.estimate_subdiv(SQRT_TOL);
+                    let n = ((0.5 / SQRT_TOL * params.val).ceil() as usize).max(1);
                     let step = 1.0 / (n as f64);
                     for i in 1..n {
                         let u = (i as f64) * step;
@@ -111,7 +130,22 @@ pub(crate) fn flatten<S: Simd>(
             PathEl::CurveTo(p1, p2, p3) => {
                 debug_assert!(!closed, "Expected a `MoveTo` before a `CurveTo`");
                 let p0 = last_pt;
-                // An upper bound on the shortest distance of any point on the cubic Bezier
+                let line = Line::new(p0, p3);
+                // If the cubic Bézier is fully to the right, top, or bottom of the viewport, it
+                // does not impact pixel coverage or winding. We can ignore it. The following
+                // checks that conservatively by checking whether the bounding box of the Bézier's
+                // control points is fully to the right, top, or bottom of the viewport.
+                if [p0, p1, p2, p3].into_iter().all(|p| p.x > width)
+                    || [p0, p1, p2, p3].into_iter().all(|p| p.y < 0.)
+                    || [p0, p1, p2, p3].into_iter().all(|p| p.y > height)
+                {
+                    callback.callback(LinePathEl::MoveTo(p3));
+                }
+                // The following checks two things. First, if the cubic Bézier is fully to the
+                // left of the viewport, it may affect pixel coverage and winding, but its exact
+                // shape does not matter. It can be emitted as a line segment [p0, p3].
+                //
+                // Second, an upper bound on the shortest distance of any point on the cubic Bézier
                 // curve to the line segment [p0, p3] is 3/4 of the maximum of the
                 // control-point-to-line-segment distances.
                 //
@@ -130,16 +164,16 @@ pub(crate) fn flatten<S: Simd>(
                 //
                 // The following takes the square to elide the square root of the Euclidean
                 // distance.
-                let line = Line::new(p0, p3);
-                if f64::max(
-                    line.nearest(p1, 0.).distance_sq,
-                    line.nearest(p2, 0.).distance_sq,
-                ) <= 16. / 9. * TOL_2
+                else if [p0, p1, p2, p3].into_iter().all(|p| p.x < 0.)
+                    || f64::max(
+                        line.nearest(p1, 0.).distance_sq,
+                        line.nearest(p2, 0.).distance_sq,
+                    ) <= 16. / 9. * TOL_2
                 {
                     callback.callback(LinePathEl::LineTo(p3));
                 } else {
                     let c = CubicBez::new(p0, p1, p2, p3);
-                    let max = flatten_cubic_simd(simd, c, flatten_ctx, tolerance as f32);
+                    let max = flatten_cubic_simd(simd, c, flatten_ctx);
 
                     for p in &flatten_ctx.flattened_cubics[1..max] {
                         callback.callback(LinePathEl::LineTo(Point::new(p.x as f64, p.y as f64)));
@@ -289,7 +323,7 @@ fn approx_parabola_integral_simd<S: Simd>(x: f32x8<S>) -> f32x8<S> {
     const D: f32 = 0.67;
     const D_POWI_4: f32 = 0.201_511_2;
 
-    let temp1 = f32x8::splat(simd, 0.25).madd(x * x, f32x8::splat(simd, D_POWI_4));
+    let temp1 = f32x8::splat(simd, 0.25).mul_add(x * x, f32x8::splat(simd, D_POWI_4));
     let temp2 = temp1.sqrt();
     let temp3 = temp2.sqrt();
     let temp4 = f32x8::splat(simd, 1.0) - f32x8::splat(simd, D);
@@ -304,7 +338,7 @@ fn approx_parabola_integral_simd_x4<S: Simd>(x: f32x4<S>) -> f32x4<S> {
     const D: f32 = 0.67;
     const D_POWI_4: f32 = 0.201_511_2;
 
-    let temp1 = f32x4::splat(simd, 0.25).madd(x * x, f32x4::splat(simd, D_POWI_4));
+    let temp1 = f32x4::splat(simd, 0.25).mul_add(x * x, f32x4::splat(simd, D_POWI_4));
     let temp2 = temp1.sqrt();
     let temp3 = temp2.sqrt();
     let temp4 = f32x4::splat(simd, 1.0) - f32x4::splat(simd, D);
@@ -320,7 +354,7 @@ fn approx_parabola_inv_integral_simd<S: Simd>(x: f32x8<S>) -> f32x8<S> {
     const ONE_MINUS_B: f32 = 1.0 - B;
 
     let temp1 = f32x8::splat(simd, B * B);
-    let temp2 = f32x8::splat(simd, 0.25).madd(x * x, temp1);
+    let temp2 = f32x8::splat(simd, 0.25).mul_add(x * x, temp1);
     let temp3 = temp2.sqrt();
     let temp4 = f32x8::splat(simd, ONE_MINUS_B) + temp3;
 
@@ -345,9 +379,9 @@ fn eval_simd<S: Simd>(
     let im0 = p0 * mt * mt * mt;
     let im1 = p1 * mt * mt * 3.0;
     let im2 = p2 * mt * 3.0;
-    let im3 = p3.madd(t, im2) * t;
+    let im3 = p3.mul_add(t, im2) * t;
 
-    (im1 + im3).madd(t, im0)
+    (im1 + im3).mul_add(t, im0)
 }
 
 #[inline(always)]
@@ -412,8 +446,8 @@ fn estimate_subdiv_simd<S: Simd>(simd: S, sqrt_tol: f32, ctx: &mut FlattenCtx) {
         let p_onehalf = f32x8::from_slice(simd, &odd_pts[i * 8..][..8]);
         let p2 = f32x8::from_slice(simd, &even_pts[(i * 8 + 2)..][..8]);
         let x = p0 * -0.5;
-        let x1 = p_onehalf.madd(2.0, x);
-        let p1 = p2.madd(-0.5, x1);
+        let x1 = p_onehalf.mul_add(2.0, x);
+        let p1 = p2.mul_add(-0.5, x1);
 
         odd_pts[(i * 8)..][..8].copy_from_slice(p1.as_slice());
 
@@ -428,7 +462,7 @@ fn estimate_subdiv_simd<S: Simd>(simd: S, sqrt_tol: f32, ctx: &mut FlattenCtx) {
         let d02x = d01x + d12x;
         let d02y = d01y + d12y;
         // (d02x * ddy) - (d02y * ddx)
-        let cross = ddx.madd(-d02y, d02x * ddy);
+        let cross = ddx.mul_add(-d02y, d02x * ddy);
 
         let x0_x2_a = {
             let (d01x_low, _) = simd.split_f32x8(d01x);
@@ -442,11 +476,11 @@ fn estimate_subdiv_simd<S: Simd>(simd: S, sqrt_tol: f32, ctx: &mut FlattenCtx) {
 
             simd.combine_f32x4(d12y_low, d01y_low)
         };
-        let x0_x2_num = temp1.madd(ddy, x0_x2_a);
+        let x0_x2_num = temp1.mul_add(ddy, x0_x2_a);
         let x0_x2 = x0_x2_num / cross;
         let (ddx_low, _) = simd.split_f32x8(ddx);
         let (ddy_low, _) = simd.split_f32x8(ddy);
-        let dd_hypot = ddy_low.madd(ddy_low, ddx_low * ddx_low).sqrt();
+        let dd_hypot = ddy_low.mul_add(ddy_low, ddx_low * ddx_low).sqrt();
         let (x0, x2) = simd.split_f32x8(x0_x2);
         let scale_denom = dd_hypot * (x2 - x0);
         let (temp2, _) = simd.split_f32x8(cross);
@@ -495,9 +529,9 @@ fn output_lines_simd<S: Simd>(
 
     const IOTA2: [f32; 8] = [0., 0., 1., 1., 2., 2., 3., 3.];
     let iota2 = f32x8::from_slice(simd, IOTA2.as_ref());
-    let x = iota2.madd(dx, f32x8::splat(simd, x0));
+    let x = iota2.mul_add(dx, f32x8::splat(simd, x0));
     let da = f32x8::splat(simd, ctx.da[i]);
-    let mut a = da.madd(x, f32x8::splat(simd, ctx.a0[i]));
+    let mut a = da.mul_add(x, f32x8::splat(simd, ctx.a0[i]));
     let a_inc = 4.0 * dx * da;
     let uscale = f32x8::splat(simd, ctx.uscale[i]);
 
@@ -505,11 +539,11 @@ fn output_lines_simd<S: Simd>(
 
     for j in 0..n.div_ceil(4) {
         let u = approx_parabola_inv_integral_simd(a);
-        let t = u.madd(uscale, -ctx.u0[i] * uscale);
+        let t = u.mul_add(uscale, -ctx.u0[i] * uscale);
         let mt = 1.0 - t;
         let z = p0 * mt * mt;
-        let z1 = p1.madd(2.0 * t * mt, z);
-        let p = p2.madd(t * t, z1);
+        let z1 = p1.mul_add(2.0 * t * mt, z);
+        let p = p2.mul_add(t * t, z1);
 
         out[j * 8..][..8].copy_from_slice(p.as_slice());
 
@@ -518,10 +552,10 @@ fn output_lines_simd<S: Simd>(
 }
 
 #[inline(always)]
-fn flatten_cubic_simd<S: Simd>(simd: S, c: CubicBez, ctx: &mut FlattenCtx, accuracy: f32) -> usize {
-    let n_quads = estimate_num_quads(c, accuracy);
+fn flatten_cubic_simd<S: Simd>(simd: S, c: CubicBez, ctx: &mut FlattenCtx) -> usize {
+    let n_quads = estimate_num_quads(c, TOL as f32);
     eval_cubics_simd(simd, &c, n_quads, ctx);
-    let tol = accuracy * (1.0 - TO_QUAD_TOL);
+    let tol = (TOL as f32) * (1.0 - TO_QUAD_TOL);
     let sqrt_tol = tol.sqrt();
     estimate_subdiv_simd(simd, sqrt_tol, ctx);
     let sum: f32 = ctx.val[..n_quads].iter().sum();
