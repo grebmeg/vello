@@ -11,29 +11,31 @@ use crate::dispatch::multi_threaded::MultiThreadedDispatcher;
 use crate::dispatch::single_threaded::SingleThreadedDispatcher;
 use crate::kurbo::{PathEl, Point};
 use alloc::boxed::Box;
-#[cfg(feature = "text")]
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use hashbrown::HashMap;
 use vello_common::blurred_rounded_rect::BlurredRoundedRectangle;
 use vello_common::encode::{EncodeExt, EncodedPaint};
 use vello_common::fearless_simd::Level;
 use vello_common::filter_effects::Filter;
 use vello_common::kurbo::{Affine, BezPath, Cap, Join, Rect, Stroke};
 use vello_common::mask::Mask;
-use vello_common::paint::{Paint, PaintType};
+#[cfg(feature = "text")]
+use vello_common::paint::{Image, ImageSource};
+use vello_common::paint::{ImageId, ImageResolver, Paint, PaintType, Tint};
 use vello_common::peniko::color::palette::css::BLACK;
 use vello_common::peniko::{BlendMode, Fill};
 use vello_common::pixmap::Pixmap;
 use vello_common::recording::{PushLayerCommand, Recordable, Recorder, Recording, RenderCommand};
 use vello_common::strip::Strip;
 use vello_common::strip_generator::{GenerationMode, StripGenerator, StripStorage};
+use vello_common::util::{is_integer_rect, is_integer_translation};
 #[cfg(feature = "text")]
 use vello_common::{
     color::{AlphaColor, Srgb},
     colr::{ColrPainter, ColrRenderer},
     glyph::{GlyphCaches, GlyphRenderer, GlyphRunBuilder, GlyphType, PreparedGlyph},
-    paint::ImageSource,
 };
 
 /// A render context for CPU-based 2D graphics rendering.
@@ -66,6 +68,8 @@ pub struct RenderContext {
     /// Optional threshold for aliasing.
     pub(crate) aliasing_threshold: Option<u8>,
     pub(crate) encoded_paints: Vec<EncodedPaint>,
+    /// Optional tint applied to image paints.
+    pub(crate) tint: Option<Tint>,
     pub(crate) filter: Option<Filter>,
     #[cfg_attr(
         not(feature = "text"),
@@ -75,6 +79,8 @@ pub struct RenderContext {
     dispatcher: Box<dyn Dispatcher>,
     #[cfg(feature = "text")]
     pub(crate) glyph_caches: Option<GlyphCaches>,
+    /// Registry for resolving `ImageSource::OpaqueId` to pixmap data.
+    image_registry: ImageRegistry,
 }
 
 /// Settings to apply to the render context.
@@ -167,9 +173,11 @@ impl RenderContext {
             stroke,
             temp_path,
             encoded_paints,
+            tint: None,
             filter: None,
             #[cfg(feature = "text")]
             glyph_caches: Some(GlyphCaches::default()),
+            image_registry: ImageRegistry::new(),
         }
     }
 
@@ -181,11 +189,13 @@ impl RenderContext {
                 g.encode_into(
                     &mut self.encoded_paints,
                     self.transform * self.paint_transform,
+                    None,
                 )
             }
             PaintType::Image(i) => i.encode_into(
                 &mut self.encoded_paints,
                 self.transform * self.paint_transform,
+                self.tint,
             ),
         }
     }
@@ -227,18 +237,42 @@ impl RenderContext {
     /// Fill a rectangle.
     pub fn fill_rect(&mut self, rect: &Rect) {
         self.with_optional_filter(|ctx| {
-            ctx.rect_to_temp_path(rect);
             let paint = ctx.encode_current_paint();
-            ctx.dispatcher.fill_path(
-                &ctx.temp_path,
-                ctx.fill_rule,
-                ctx.transform,
-                paint,
-                ctx.blend_mode,
-                ctx.aliasing_threshold,
-                ctx.mask.clone(),
-                &ctx.encoded_paints,
-            );
+
+            // Fast path: use optimized rect filling when transforms are integer translations
+            // AND rect coordinates are integers. This bypasses path processing by generating
+            // strips directly for the rectangle.
+            // - Requires integer translation to ensure pixel-aligned rect boundaries.
+            // - Requires integer rect coordinates because the optimized path doesn't handle
+            //   anti-aliasing for fractional edges.
+            // - Also requires simple paint transform to avoid precision differences with complex paints.
+            if is_integer_translation(&ctx.transform)
+                && is_integer_translation(&ctx.paint_transform)
+                && is_integer_rect(rect)
+            {
+                // Transform the rect to screen coordinates.
+                let transformed_rect = ctx.transform.transform_rect_bbox(*rect);
+                ctx.dispatcher.fill_rect_fast(
+                    &transformed_rect,
+                    paint,
+                    ctx.blend_mode,
+                    ctx.mask.clone(),
+                    &ctx.encoded_paints,
+                );
+            } else {
+                // Fall back to path-based rendering for rotated/skewed transforms.
+                ctx.rect_to_temp_path(rect);
+                ctx.dispatcher.fill_path(
+                    &ctx.temp_path,
+                    ctx.fill_rule,
+                    ctx.transform,
+                    paint,
+                    ctx.blend_mode,
+                    ctx.aliasing_threshold,
+                    ctx.mask.clone(),
+                    &ctx.encoded_paints,
+                );
+            }
         });
     }
 
@@ -301,7 +335,7 @@ impl RenderContext {
 
         self.rect_to_temp_path(&inflated_rect);
 
-        let paint = blurred_rect.encode_into(&mut self.encoded_paints, transform);
+        let paint = blurred_rect.encode_into(&mut self.encoded_paints, transform, None);
         self.dispatcher.fill_path(
             &self.temp_path,
             Fill::NonZero,
@@ -424,6 +458,10 @@ impl RenderContext {
     }
 
     /// Set the current paint.
+    ///
+    /// If the paint is an image with `ImageSource::OpaqueId`, it will be
+    /// resolved to the corresponding pixmap at rasterization time.
+    /// Make sure to register images with [`register_image`](Self::register_image) first.
     pub fn set_paint(&mut self, paint: impl Into<PaintType>) {
         self.paint = paint.into();
     }
@@ -431,6 +469,16 @@ impl RenderContext {
     /// Get the current paint.
     pub fn paint(&self) -> &PaintType {
         &self.paint
+    }
+
+    /// Set the tint for subsequent image paint operations.
+    pub fn set_tint(&mut self, tint: Option<Tint>) {
+        self.tint = tint;
+    }
+
+    /// Clear the tint, so subsequent image paints are drawn without tinting.
+    pub fn reset_tint(&mut self) {
+        self.tint = None;
     }
 
     /// Set the blend mode that should be used when drawing objects.
@@ -525,6 +573,8 @@ impl RenderContext {
         #[cfg(feature = "text")]
         self.glyph_caches.as_mut().unwrap().maintain();
         self.blend_mode = BlendMode::default();
+        self.tint = None;
+        self.clear_images();
     }
 
     /// Push a new clip path to the clip stack.
@@ -578,8 +628,14 @@ impl RenderContext {
             buffer.len(),
         );
 
-        self.dispatcher
-            .rasterize(buffer, render_mode, width, height, &self.encoded_paints);
+        self.dispatcher.rasterize(
+            buffer,
+            render_mode,
+            width,
+            height,
+            &self.encoded_paints,
+            &self.image_registry,
+        );
     }
 
     /// Render the current context into a pixmap.
@@ -624,6 +680,7 @@ impl RenderContext {
             dst_buffer_height,
             self.render_settings.render_mode,
             &self.encoded_paints,
+            &self.image_registry,
         );
     }
 
@@ -654,6 +711,49 @@ impl RenderContext {
         } else {
             f(self);
         }
+    }
+
+    /// Save the current rendering state.
+    pub fn take_current_state(&mut self) -> RenderState {
+        RenderState {
+            paint: self.paint.clone(),
+            paint_transform: self.paint_transform,
+            transform: self.transform,
+            fill_rule: self.fill_rule,
+            stroke: core::mem::take(&mut self.stroke),
+        }
+    }
+
+    /// Restore the saved rendering state.
+    pub fn restore_state(&mut self, state: RenderState) {
+        self.transform = state.transform;
+        self.fill_rule = state.fill_rule;
+        self.stroke = state.stroke;
+        self.paint = state.paint;
+        self.paint_transform = state.paint_transform;
+    }
+}
+
+/// Image registry implementation.
+impl RenderContext {
+    /// Register a pixmap in the image registry and return its [`ImageId`].
+    pub fn register_image(&mut self, pixmap: Arc<Pixmap>) -> ImageId {
+        self.image_registry.register(pixmap)
+    }
+
+    /// Remove an image from the registry.
+    pub fn destroy_image(&mut self, id: ImageId) -> bool {
+        self.image_registry.destroy(id)
+    }
+
+    /// Resolve an `ImageId` to its pixmap data.
+    pub fn resolve_image(&self, id: ImageId) -> Option<Arc<Pixmap>> {
+        self.image_registry.resolve(id)
+    }
+
+    /// Clear the image registry.
+    pub fn clear_images(&mut self) {
+        self.image_registry.clear();
     }
 }
 
@@ -692,7 +792,7 @@ impl GlyphRenderer for RenderContext {
                     crate::peniko::ImageQuality::Medium
                 };
 
-                let image = vello_common::paint::Image {
+                let image = Image {
                     image: ImageSource::Pixmap(Arc::new(glyph.pixmap)),
                     sampler: ImageSampler {
                         x_extend: crate::peniko::Extend::Pad,
@@ -747,7 +847,7 @@ impl GlyphRenderer for RenderContext {
                 let has_skew = prepared_glyph.transform.as_coeffs()[1] != 0.0
                     || prepared_glyph.transform.as_coeffs()[2] != 0.0;
 
-                let image = vello_common::paint::Image {
+                let image = Image {
                     image: ImageSource::Pixmap(Arc::new(glyph_pixmap)),
                     sampler: ImageSampler {
                         x_extend: crate::peniko::Extend::Pad,
@@ -923,6 +1023,9 @@ impl Recordable for RenderContext {
                 RenderCommand::SetStroke(stroke) => {
                     self.set_stroke(stroke.clone());
                 }
+                RenderCommand::SetTint(tint) => {
+                    self.set_tint(*tint);
+                }
                 RenderCommand::SetFilterEffect(filter) => {
                     self.set_filter_effect(filter.clone());
                 }
@@ -952,9 +1055,53 @@ impl Recordable for RenderContext {
     }
 }
 
+/// Registry that maps opaque [`ImageId`]s to [`Pixmap`] data.
+///
+/// Used by [`RenderContext`] to resolve `ImageSource::OpaqueId` at rasterization time.
+#[derive(Debug)]
+struct ImageRegistry {
+    images: HashMap<u32, Arc<Pixmap>>,
+    next_id: u32,
+}
+
+impl ImageRegistry {
+    fn new() -> Self {
+        Self {
+            images: HashMap::new(),
+            next_id: 0,
+        }
+    }
+
+    fn register(&mut self, pixmap: Arc<Pixmap>) -> ImageId {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.images.insert(id, pixmap);
+        ImageId::new(id)
+    }
+
+    fn destroy(&mut self, id: ImageId) -> bool {
+        self.images.remove(&id.as_u32()).is_some()
+    }
+
+    fn resolve(&self, id: ImageId) -> Option<Arc<Pixmap>> {
+        self.images.get(&id.as_u32()).cloned()
+    }
+
+    fn clear(&mut self) {
+        self.images.clear();
+        self.next_id = 0;
+    }
+}
+
+impl ImageResolver for ImageRegistry {
+    fn resolve(&self, id: ImageId) -> Option<Arc<Pixmap>> {
+        self.images.get(&id.as_u32()).cloned()
+    }
+}
+
 /// Saved state for recording operations.
 #[derive(Debug)]
-struct RenderState {
+pub struct RenderState {
     transform: Affine,
     fill_rule: Fill,
     stroke: Stroke,
@@ -1137,26 +1284,6 @@ impl RenderContext {
                 adjusted_strip
             })
             .collect()
-    }
-
-    /// Save the current rendering state.
-    fn take_current_state(&mut self) -> RenderState {
-        RenderState {
-            paint: self.paint.clone(),
-            paint_transform: self.paint_transform,
-            transform: self.transform,
-            fill_rule: self.fill_rule,
-            stroke: core::mem::take(&mut self.stroke),
-        }
-    }
-
-    /// Restore the saved rendering state.
-    fn restore_state(&mut self, state: RenderState) {
-        self.transform = state.transform;
-        self.fill_rule = state.fill_rule;
-        self.stroke = state.stroke;
-        self.paint = state.paint;
-        self.paint_transform = state.paint_transform;
     }
 }
 

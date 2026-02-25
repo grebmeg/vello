@@ -4,7 +4,7 @@
 use crate::RenderMode;
 use crate::dispatch::Dispatcher;
 use crate::fine::{Fine, FineKernel};
-use crate::kurbo::{Affine, BezPath, Stroke};
+use crate::kurbo::{Affine, BezPath, Rect, Stroke};
 use crate::layer_manager::LayerManager;
 use crate::peniko::{BlendMode, Fill};
 use crate::region::Regions;
@@ -15,7 +15,7 @@ use vello_common::encode::EncodedPaint;
 use vello_common::fearless_simd::{Level, Simd};
 use vello_common::filter_effects::Filter;
 use vello_common::mask::Mask;
-use vello_common::paint::{Paint, PremulColor};
+use vello_common::paint::{ImageResolver, Paint, PremulColor};
 use vello_common::pixmap::Pixmap;
 use vello_common::render_graph::{RenderGraph, RenderNodeKind};
 use vello_common::strip::Strip;
@@ -94,10 +94,11 @@ impl SingleThreadedDispatcher {
         width: u16,
         height: u16,
         encoded_paints: &[EncodedPaint],
+        image_resolver: &dyn ImageResolver,
     ) {
         use crate::fine::F32Kernel;
         use vello_common::fearless_simd::dispatch;
-        dispatch!(self.level, simd => self.rasterize_with::<_, F32Kernel>(simd, buffer, width, height, encoded_paints));
+        dispatch!(self.level, simd => self.rasterize_with::<_, F32Kernel>(simd, buffer, width, height, encoded_paints, image_resolver));
     }
 
     /// Rasterizes the scene using u8 precision (fast).
@@ -111,10 +112,11 @@ impl SingleThreadedDispatcher {
         width: u16,
         height: u16,
         encoded_paints: &[EncodedPaint],
+        image_resolver: &dyn ImageResolver,
     ) {
         use crate::fine::U8Kernel;
         use vello_common::fearless_simd::dispatch;
-        dispatch!(self.level, simd => self.rasterize_with::<_, U8Kernel>(simd, buffer, width, height, encoded_paints));
+        dispatch!(self.level, simd => self.rasterize_with::<_, U8Kernel>(simd, buffer, width, height, encoded_paints, image_resolver));
     }
 
     /// Core rasterization dispatcher that chooses between simple and filter-aware paths.
@@ -132,6 +134,7 @@ impl SingleThreadedDispatcher {
         width: u16,
         height: u16,
         encoded_paints: &[EncodedPaint],
+        image_resolver: &dyn ImageResolver,
     ) {
         let mut layer_manager = LayerManager::new();
 
@@ -143,11 +146,19 @@ impl SingleThreadedDispatcher {
                 width,
                 height,
                 encoded_paints,
+                image_resolver,
                 &mut layer_manager,
             );
         } else {
             // Use simple direct rasterization for scenes without filters.
-            self.rasterize_simple::<S, F>(simd, buffer, width, height, encoded_paints);
+            self.rasterize_simple::<S, F>(
+                simd,
+                buffer,
+                width,
+                height,
+                encoded_paints,
+                image_resolver,
+            );
         }
     }
 
@@ -168,6 +179,7 @@ impl SingleThreadedDispatcher {
         width: u16,
         height: u16,
         encoded_paints: &[EncodedPaint],
+        image_resolver: &dyn ImageResolver,
         layer_manager: &mut LayerManager,
     ) {
         let mut fine = Fine::<S, F>::new(simd);
@@ -206,6 +218,7 @@ impl SingleThreadedDispatcher {
                             PremulColor::from_alpha_color(TRANSPARENT),
                             layer_manager,
                             encoded_paints,
+                            image_resolver,
                         );
 
                         debug_assert_eq!(
@@ -244,6 +257,7 @@ impl SingleThreadedDispatcher {
                             bg,
                             layer_manager,
                             encoded_paints,
+                            image_resolver,
                         );
 
                         debug_assert_eq!(
@@ -274,6 +288,7 @@ impl SingleThreadedDispatcher {
     /// * `clear_color` - Initial color for the tile.
     /// * `layer_manager` - Storage for filtered layer buffers.
     /// * `encoded_paints` - Paint definitions for the scene.
+    /// * `image_resolver` - Resolver for looking up opaque image IDs.
     fn process_layer_tile<S: Simd, F: FineKernel<S>>(
         &self,
         fine: &mut Fine<S, F>,
@@ -283,14 +298,19 @@ impl SingleThreadedDispatcher {
         clear_color: PremulColor,
         layer_manager: &mut LayerManager,
         encoded_paints: &[EncodedPaint],
+        image_resolver: &dyn ImageResolver,
     ) {
         let wtile = &self.wide.get(x, y);
         fine.set_coords(x, y);
         fine.clear(clear_color);
 
         // Process all commands in this layer's render range.
-        // Invariant: tiles within a layer's bbox must have commands for that layer.
-        let ranges = wtile.layer_cmd_ranges.get(&layer_id).unwrap();
+        // It can happen that the layer has no associated ranges in this wide tile in
+        // case they have been cleared by setting a new wide tile background, for example
+        // when filling a full-tile opaque solid color.
+        let Some(ranges) = wtile.layer_cmd_ranges.get(&layer_id) else {
+            return;
+        };
 
         let mut cmd_idx = ranges.render_range.start;
         while cmd_idx < ranges.render_range.end {
@@ -300,14 +320,16 @@ impl SingleThreadedDispatcher {
                 cmd,
                 &self.strip_storage.alphas,
                 encoded_paints,
+                image_resolver,
                 &self.wide.attrs,
             );
 
             // Special handling for filtered layer composition.
             // Filtered layers have already been rendered and stored in layer_manager.
             // Here we composite them into the current buffer, with special handling for clipping.
-            if let Cmd::PushBuf(LayerKind::Filtered(child_layer_id)) = cmd {
-                // Invariant: PushBuf(Filtered) command must have corresponding layer_cmd_ranges entry.
+            if let Cmd::PushBuf(LayerKind::Filtered(child_layer_id), _) = cmd {
+                // Unlike above, the unwrap is safe here because as long as the filtered layer
+                // is referenced in the wide tile, it must have associated layer ranges.
                 let filtered_ranges = wtile.layer_cmd_ranges.get(child_layer_id).unwrap();
 
                 // Check what comes after the filtered layer push to determine clipping state
@@ -325,11 +347,12 @@ impl SingleThreadedDispatcher {
                     }
 
                     // Partial clip: push the clip buffer, then composite the filtered layer
-                    Some(Cmd::PushBuf(LayerKind::Clip(_))) => {
+                    Some(Cmd::PushBuf(LayerKind::Clip(_), _)) => {
                         fine.run_cmd(
                             &wtile.cmds[cmd_idx + 1],
                             &self.strip_storage.alphas,
                             encoded_paints,
+                            image_resolver,
                             &self.wide.attrs,
                         );
                         cmd_idx += 1;
@@ -372,6 +395,7 @@ impl SingleThreadedDispatcher {
         width: u16,
         height: u16,
         encoded_paints: &[EncodedPaint],
+        image_resolver: &dyn ImageResolver,
     ) {
         let mut regions = Regions::new(width, height, buffer);
         let mut fine = Fine::<S, F>::new(simd);
@@ -390,6 +414,7 @@ impl SingleThreadedDispatcher {
                     cmd,
                     &self.strip_storage.alphas,
                     encoded_paints,
+                    image_resolver,
                     &self.wide.attrs,
                 );
             }
@@ -415,11 +440,12 @@ impl SingleThreadedDispatcher {
         dst_buffer_width: u16,
         dst_buffer_height: u16,
         encoded_paints: &[EncodedPaint],
+        image_resolver: &dyn ImageResolver,
     ) {
         use crate::fine::F32Kernel;
         use vello_common::fearless_simd::dispatch;
         dispatch!(self.level, simd => self.composite_at_offset_with::<_, F32Kernel>(
-            simd, buffer, width, height, dst_x, dst_y, dst_buffer_width, dst_buffer_height, encoded_paints
+            simd, buffer, width, height, dst_x, dst_y, dst_buffer_width, dst_buffer_height, encoded_paints, image_resolver
         ));
     }
 
@@ -435,11 +461,12 @@ impl SingleThreadedDispatcher {
         dst_buffer_width: u16,
         dst_buffer_height: u16,
         encoded_paints: &[EncodedPaint],
+        image_resolver: &dyn ImageResolver,
     ) {
         use crate::fine::U8Kernel;
         use vello_common::fearless_simd::dispatch;
         dispatch!(self.level, simd => self.composite_at_offset_with::<_, U8Kernel>(
-            simd, buffer, width, height, dst_x, dst_y, dst_buffer_width, dst_buffer_height, encoded_paints
+            simd, buffer, width, height, dst_x, dst_y, dst_buffer_width, dst_buffer_height, encoded_paints, image_resolver
         ));
     }
 
@@ -458,6 +485,7 @@ impl SingleThreadedDispatcher {
         dst_buffer_width: u16,
         dst_buffer_height: u16,
         encoded_paints: &[EncodedPaint],
+        image_resolver: &dyn ImageResolver,
     ) {
         let mut regions = Regions::new_at_offset(
             width,
@@ -485,6 +513,7 @@ impl SingleThreadedDispatcher {
                     cmd,
                     &self.strip_storage.alphas,
                     encoded_paints,
+                    image_resolver,
                     &self.wide.attrs,
                 );
             }
@@ -521,7 +550,7 @@ impl Dispatcher for SingleThreadedDispatcher {
             self.clip_context.get(),
         );
 
-        // Generate coarse-level commands from strips (layer_id 0 = root layer).
+        // Generate coarse-level commands from strips (thread_idx 0 for single-threaded).
         wide.generate(
             &self.strip_storage.strips,
             paint,
@@ -555,7 +584,35 @@ impl Dispatcher for SingleThreadedDispatcher {
             self.clip_context.get(),
         );
 
-        // Generate coarse-level commands from strips (layer_id 0 = root layer).
+        // Generate coarse-level commands from strips (thread_idx 0 for single-threaded).
+        wide.generate(
+            &self.strip_storage.strips,
+            paint,
+            blend_mode,
+            0,
+            mask,
+            encoded_paints,
+        );
+    }
+
+    fn fill_rect_fast(
+        &mut self,
+        rect: &Rect,
+        paint: Paint,
+        blend_mode: BlendMode,
+        mask: Option<Mask>,
+        encoded_paints: &[EncodedPaint],
+    ) {
+        let wide = &mut self.wide;
+
+        // Generate strips directly for the rectangle (bypasses path processing).
+        self.strip_generator.generate_filled_rect_fast(
+            rect,
+            &mut self.strip_storage,
+            self.clip_context.get(),
+        );
+
+        // Generate coarse-level commands from strips (thread_idx 0 for single-threaded).
         wide.generate(
             &self.strip_storage.strips,
             paint,
@@ -651,19 +708,20 @@ impl Dispatcher for SingleThreadedDispatcher {
         width: u16,
         height: u16,
         encoded_paints: &[EncodedPaint],
+        image_resolver: &dyn ImageResolver,
     ) {
         // If only the u8 pipeline is enabled, then use it
         #[cfg(all(feature = "u8_pipeline", not(feature = "f32_pipeline")))]
         {
             let _ = render_mode;
-            self.rasterize_u8(buffer, width, height, encoded_paints);
+            self.rasterize_u8(buffer, width, height, encoded_paints, image_resolver);
         }
 
         // If only the f32 pipeline is enabled, then use it
         #[cfg(all(feature = "f32_pipeline", not(feature = "u8_pipeline")))]
         {
             let _ = render_mode;
-            self.rasterize_f32(buffer, width, height, encoded_paints);
+            self.rasterize_f32(buffer, width, height, encoded_paints, image_resolver);
         }
 
         // If both pipelines are enabled, select precision based on render mode parameter.
@@ -671,11 +729,11 @@ impl Dispatcher for SingleThreadedDispatcher {
         match render_mode {
             RenderMode::OptimizeSpeed => {
                 // Use u8 precision for faster rendering.
-                self.rasterize_u8(buffer, width, height, encoded_paints);
+                self.rasterize_u8(buffer, width, height, encoded_paints, image_resolver);
             }
             RenderMode::OptimizeQuality => {
                 // Use f32 precision for higher quality.
-                self.rasterize_f32(buffer, width, height, encoded_paints);
+                self.rasterize_f32(buffer, width, height, encoded_paints, image_resolver);
             }
         }
 
@@ -683,7 +741,14 @@ impl Dispatcher for SingleThreadedDispatcher {
         {
             // This case never gets hit because there is a compile_error in the root.
             // But have this code disables some warnings and makes the compile error easier to read
-            let _ = (buffer, render_mode, width, height, encoded_paints);
+            let _ = (
+                buffer,
+                render_mode,
+                width,
+                height,
+                encoded_paints,
+                image_resolver,
+            );
         }
     }
 
@@ -698,6 +763,7 @@ impl Dispatcher for SingleThreadedDispatcher {
         dst_buffer_height: u16,
         render_mode: RenderMode,
         encoded_paints: &[EncodedPaint],
+        image_resolver: &dyn ImageResolver,
     ) {
         #[cfg(all(feature = "u8_pipeline", not(feature = "f32_pipeline")))]
         {
@@ -711,6 +777,7 @@ impl Dispatcher for SingleThreadedDispatcher {
                 dst_buffer_width,
                 dst_buffer_height,
                 encoded_paints,
+                image_resolver,
             );
         }
 
@@ -726,6 +793,7 @@ impl Dispatcher for SingleThreadedDispatcher {
                 dst_buffer_width,
                 dst_buffer_height,
                 encoded_paints,
+                image_resolver,
             );
         }
 
@@ -741,6 +809,7 @@ impl Dispatcher for SingleThreadedDispatcher {
                     dst_buffer_width,
                     dst_buffer_height,
                     encoded_paints,
+                    image_resolver,
                 );
             }
             RenderMode::OptimizeQuality => {
@@ -753,6 +822,7 @@ impl Dispatcher for SingleThreadedDispatcher {
                     dst_buffer_width,
                     dst_buffer_height,
                     encoded_paints,
+                    image_resolver,
                 );
             }
         }
@@ -769,6 +839,7 @@ impl Dispatcher for SingleThreadedDispatcher {
                 dst_buffer_height,
                 render_mode,
                 encoded_paints,
+                image_resolver,
             );
         }
     }
@@ -780,7 +851,7 @@ impl Dispatcher for SingleThreadedDispatcher {
         blend_mode: BlendMode,
         encoded_paints: &[EncodedPaint],
     ) {
-        // Generate coarse-level commands from pre-computed strips (layer_id 0 = root layer).
+        // Generate coarse-level commands from pre-computed strips (thread_idx 0 for single-threaded).
         self.wide
             .generate(strip_buf, paint, blend_mode, 0, None, encoded_paints);
     }

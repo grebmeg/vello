@@ -28,7 +28,7 @@ pub struct RenderSize {
 }
 
 /// Configuration for the GPU renderer.
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Debug, Copy, Clone, Pod, Zeroable)]
 pub struct Config {
     /// Width of the rendering target.
@@ -40,6 +40,11 @@ pub struct Config {
     /// Number of trailing zeros in `alphas_tex_width` (log2 of width).
     /// Pre-calculated on CPU since downlevel targets do not support `firstTrailingBit`.
     pub alphas_tex_width_bits: u32,
+    /// Number of trailing zeros in the encoded paints texture width (log2 of width).
+    /// Pre-calculated on CPU since downlevel targets do not support `firstTrailingBit`.
+    pub encoded_paints_tex_width_bits: u32,
+    /// Padding to satisfy WebGL's 16-byte alignment requirement for uniform buffers.
+    pub _padding: [u32; 3],
 }
 
 /// Represents a GPU strip for rendering.
@@ -120,8 +125,13 @@ pub(crate) struct GpuEncodedImage {
     pub image_offset: u32,
     /// Transform matrix [a, b, c, d, tx, ty].
     pub transform: [f32; 6],
+    /// Premultiplied tint color packed as RGBA8 unorm (`pack4x8unorm` layout).
+    /// A value of `0` means no tint is applied.
+    pub tint: u32,
+    /// [`TintMode`](vello_common::paint::TintMode) discriminant. Only meaningful when `tint != 0`.
+    pub tint_mode: u32,
     /// Padding for 16-byte alignment.
-    pub _padding: [u32; 3],
+    pub _padding: u32,
 }
 
 /// GPU encoded linear gradient data.
@@ -248,6 +258,22 @@ pub(crate) fn pack_image_params(
     debug_assert!(quality <= 3, "quality must be 0-3 (2 bits)");
     debug_assert!(atlas_index <= 255, "atlas_index must be 0-255 (8 bits)");
     (atlas_index << 6) | (extend_y << 4) | (extend_x << 2) | quality
+}
+
+/// Pack an optional [`Tint`](vello_common::paint::Tint) into a (`tint_color_u32`, `tint_mode_u32`) pair for the GPU.
+///
+/// The tint color is premultiplied before packing into a u32 in the same layout
+/// as WGSL `pack4x8unorm`. Returns `(0, 0)` when no tint is specified, which
+/// the shader interprets as "no tint".
+#[inline(always)]
+pub(crate) fn pack_tint(tint: Option<vello_common::paint::Tint>) -> (u32, u32) {
+    match tint {
+        Some(t) => {
+            let color = t.color.premultiply().to_rgba8().to_u32();
+            (color, t.mode.as_u32())
+        }
+        None => (0, 0),
+    }
 }
 
 #[cfg(all(feature = "webgl", feature = "wgpu"))]

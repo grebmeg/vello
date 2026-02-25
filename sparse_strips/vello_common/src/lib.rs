@@ -75,6 +75,7 @@ pub mod coarse;
 #[cfg(feature = "text")]
 pub mod colr;
 pub mod encode;
+pub mod filter;
 pub mod filter_effects;
 pub mod flatten;
 pub(crate) mod flatten_simd;
@@ -92,6 +93,7 @@ pub mod paint;
 pub mod pico_svg;
 pub mod pixmap;
 pub mod recording;
+pub mod rect;
 pub mod render_graph;
 pub mod simd;
 pub mod strip;

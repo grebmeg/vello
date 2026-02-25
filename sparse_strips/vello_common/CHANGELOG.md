@@ -19,6 +19,7 @@ This release has an [MSRV][] of 1.88.
 
 - Improved Bézier flattening performance by catching more Béziers whose chords are immediately within rendering tolerance. ([#1216][] by [@tomcur][])
 - Significantly improved rendering performance of scenes including blend layers by ensuring no commands are generated for wide tiles without layer content. ([#1399][] by [@tomcur][])
+- Further improved performance of scenes including blend layers by only allocating layer scratch buffers for a wide tile upon draw commands being performed in that wide tile. ([#1414][] by [@tomcur][])
 - Improved flattening and tiling performance by culling out-of-viewport Béziers before flattening. ([#1341][] by [@tomcur][])  
   This drops all out-of-viewport geometry that does not impact winding or pixel coverage (i.e., geometry above, to the right, or below the viewport).
   For geometry that is to the left of the viewport (impacting winding), this skips flattening by directly yielding the Bézier's chord.
@@ -26,6 +27,7 @@ This release has an [MSRV][] of 1.88.
 ### Fixed
 
 - Fixed rendering of blurred rounded rectangles with zero or very small blur standard deviations. ([#1422][] by [@tomcur][])
+- Fixed analytic AA performance regressions from `fearless_simd`'s tightened `max_precise` and `min_precise` semantics in v0.4.0. ([#1463][] and [#1464][] by [@tomcur][])
 
 ## [0.0.6][] - 2026-01-15
 
@@ -129,7 +131,10 @@ See also the [vello_cpu 0.0.1](../vello_cpu/CHANGELOG.md#001---2025-05-10) relea
 [#1353]: https://github.com/linebender/vello/pull/1353
 [#1354]: https://github.com/linebender/vello/pull/1354
 [#1399]: https://github.com/linebender/vello/pull/1399
+[#1414]: https://github.com/linebender/vello/pull/1414
 [#1422]: https://github.com/linebender/vello/pull/1422
+[#1463]: https://github.com/linebender/vello/pull/1463
+[#1464]: https://github.com/linebender/vello/pull/1464
 
 [Unreleased]: https://github.com/linebender/vello/compare/sparse-strips-v0.0.6...HEAD
 [0.0.6]: https://github.com/linebender/vello/compare/sparse-strips-v0.0.5...sparse-strips-v0.0.6

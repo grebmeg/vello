@@ -5,6 +5,7 @@
 
 use crate::pixmap::Pixmap;
 use alloc::sync::Arc;
+pub use peniko::Color;
 use peniko::{
     Gradient,
     color::{AlphaColor, PremulRgba8, Srgb},
@@ -74,10 +75,45 @@ pub enum ImageSource {
     /// Pixmap pixels travel with the scene packet.
     Pixmap(Arc<Pixmap>),
     /// Pixmap pixels were registered earlier; this is just a handle.
-    OpaqueId(ImageId),
+    OpaqueId {
+        /// The image handle.
+        id: ImageId,
+        /// Whether the image may contain non-opaque pixels.
+        may_have_opacities: bool,
+    },
 }
 
 impl ImageSource {
+    /// Create an [`ImageSource`] from a pre-registered image handle.
+    ///
+    /// Conservatively assumes the image may have non-opaque pixels.
+    /// Use [`Self::opaque_id_with_opacity_hint`] when you know the image is fully opaque.
+    pub fn opaque_id(id: ImageId) -> Self {
+        Self::OpaqueId {
+            id,
+            may_have_opacities: true,
+        }
+    }
+
+    /// Create an [`ImageSource`] from a pre-registered image handle,
+    /// with an explicit hint about whether the image may have non-opaque pixels.
+    pub fn opaque_id_with_opacity_hint(id: ImageId, may_have_opacities: bool) -> Self {
+        Self::OpaqueId {
+            id,
+            may_have_opacities,
+        }
+    }
+
+    /// Returns whether this image source may contain non-opaque pixels.
+    pub fn may_have_opacities(&self) -> bool {
+        match self {
+            Self::Pixmap(p) => p.may_have_opacities(),
+            Self::OpaqueId {
+                may_have_opacities, ..
+            } => *may_have_opacities,
+        }
+    }
+
     /// Convert a [`peniko::ImageData`] to an [`ImageSource`].
     ///
     /// This is a somewhat lossy conversion, as the image data data is transformed to
@@ -139,6 +175,32 @@ impl ImageSource {
 /// An image.
 pub type Image = peniko::ImageBrush<ImageSource>;
 
+/// Trait for resolving opaque image IDs to pixmaps at rasterization time.
+///
+/// This allows delaying the resolution of `ImageSource::OpaqueId` until the
+/// image is actually needed during rasterization, enabling patterns like
+/// dynamic sprite atlases where the image data may be updated between
+/// encoding and rendering.
+pub trait ImageResolver: Send + Sync {
+    /// Resolve an `ImageId` to its pixmap data.
+    ///
+    /// This method may be called repeatedly (dozens or even hundreds of times
+    /// per frame) and should therefore be very fast.
+    ///
+    /// Returns `None` if the image ID is not found in the registry.
+    fn resolve(&self, id: ImageId) -> Option<Arc<Pixmap>>;
+}
+
+/// A no-op image resolver that always returns `None`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoOpImageResolver;
+
+impl ImageResolver for NoOpImageResolver {
+    fn resolve(&self, _id: ImageId) -> Option<Arc<Pixmap>> {
+        None
+    }
+}
+
 /// A premultiplied color.
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub struct PremulColor {
@@ -174,6 +236,39 @@ impl PremulColor {
     pub fn is_opaque(&self) -> bool {
         self.premul_f32.components[3] == 1.0
     }
+}
+
+/// How tint color is applied to an image.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TintMode {
+    /// Alpha-mask tinting: `tint_premul * source.alpha`.
+    ///
+    /// The source image's alpha channel is used as a coverage mask,
+    /// and the result is filled with the premultiplied tint color.
+    /// This is the standard approach for glyph / monochrome image tinting.
+    AlphaMask = 0,
+    /// Component-wise multiply: `source * tint`.
+    ///
+    /// Each channel of the source pixel is multiplied by the corresponding
+    /// channel of the tint color. This works well for full-color images.
+    Multiply = 1,
+}
+
+impl TintMode {
+    /// Return the discriminant as a `u32`.
+    pub fn as_u32(self) -> u32 {
+        self as u32
+    }
+}
+
+/// A tint applied to image paints.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Tint {
+    /// The tint color.
+    pub color: Color,
+    /// How the tint is applied.
+    pub mode: TintMode,
 }
 
 /// A kind of paint that can be used for filling and stroking shapes.

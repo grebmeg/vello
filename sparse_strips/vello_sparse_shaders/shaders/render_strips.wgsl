@@ -110,6 +110,13 @@ struct Config {
     // Number of trailing zeros in alphas_tex_width (log2 of width).
     // Pre-calculated on CPU since WebGL2 doesn't support `firstTrailingBit`.
     alphas_tex_width_bits: u32,
+    // Number of trailing zeros in encoded_paints_tex_width (log2 of width).
+    // Pre-calculated on CPU since WebGL2 doesn't support `firstTrailingBit`.
+    encoded_paints_tex_width_bits: u32,
+    // Padding to satisfy WebGL's 16-byte alignment requirement for uniform buffers.
+    _padding0: u32,
+    _padding1: u32,
+    _padding2: u32,
 }
 
 // `paint` bit layout:
@@ -335,9 +342,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 extend_mode(local_xy.y + offset, encoded_image.extend_modes.y, image_size.y)
             );
             
+            var sample_color: vec4<f32>;
             if encoded_image.quality == IMAGE_QUALITY_HIGH {
                 let final_xy = image_offset + extended_xy;
-                let sample_color = bicubic_sample(
+                sample_color = bicubic_sample(
                     atlas_texture_array,
                     final_xy,
                     i32(encoded_image.atlas_index),
@@ -345,10 +353,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     image_size,
                     encoded_image.extend_modes,
                 );
-                final_color = alpha * sample_color;
             } else if encoded_image.quality == IMAGE_QUALITY_MEDIUM {
                 let final_xy = image_offset + extended_xy - vec2(0.5);
-                let sample_color = bilinear_sample(
+                sample_color = bilinear_sample(
                     atlas_texture_array,
                     final_xy,
                     i32(encoded_image.atlas_index),
@@ -356,17 +363,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     image_size,
                     encoded_image.extend_modes,
                 );
-                final_color = alpha * sample_color;
-            } else if encoded_image.quality == IMAGE_QUALITY_LOW {
+            } else {
                 let final_xy = image_offset + extended_xy;
-                let sample_color = textureLoad(
+                sample_color = textureLoad(
                     atlas_texture_array,
                     vec2<u32>(final_xy),
                     i32(encoded_image.atlas_index),
                     0,
                 );
-                final_color = alpha * sample_color;
             }
+
+            let is_multiply = bool(encoded_image.tint_mode);
+            final_color = alpha * select(
+                encoded_image.tint * sample_color.a,
+                sample_color * encoded_image.tint,
+                is_multiply
+            );
         } else if paint_type == PAINT_TYPE_LINEAR_GRADIENT {
             let paint_tex_idx = in.paint & PAINT_TEXTURE_INDEX_MASK;
             let linear_gradient = unpack_linear_gradient(paint_tex_idx);
@@ -762,6 +774,10 @@ fn blend_mix(cb: vec3<f32>, cs: vec3<f32>, mode: u32) -> vec3<f32> {
 }
 
 
+/// Tint mode constants.
+const TINT_MODE_ALPHA_MASK: u32 = 0u;
+const TINT_MODE_MULTIPLY: u32 = 1u;
+
 struct EncodedImage {
     /// The rendering quality of the image.
     quality: u32,
@@ -780,13 +796,25 @@ struct EncodedImage {
     /// Translation offset for 2D affine transformation.
     /// Contains [tx, ty] representing the translation component.
     translate: vec2<f32>,
+    /// Premultiplied tint color. Identity (vec4(1.0)) when no tint is set.
+    tint: vec4<f32>,
+    /// Tint mode: TINT_MODE_ALPHA_MASK (`0`) or TINT_MODE_MULTIPLY (`1`).
+    tint_mode: u32,
+}
+
+// Convert a flat texel index to 2D texture coordinates for the encoded paints texture.
+fn encoded_paint_coord(flat_idx: u32) -> vec2<u32> {
+    return vec2<u32>(
+        flat_idx & ((1u << config.encoded_paints_tex_width_bits) - 1u),
+        flat_idx >> config.encoded_paints_tex_width_bits
+    );
 }
 
 // Unpack encoded image from the encoded paints texture.
 fn unpack_encoded_image(paint_tex_idx: u32) -> EncodedImage {
-    let texel0 = textureLoad(encoded_paints_texture, vec2<u32>(paint_tex_idx, 0), 0);
-    let texel1 = textureLoad(encoded_paints_texture, vec2<u32>(paint_tex_idx + 1u, 0), 0);
-    let texel2 = textureLoad(encoded_paints_texture, vec2<u32>(paint_tex_idx + 2u, 0), 0);
+    let texel0 = textureLoad(encoded_paints_texture, encoded_paint_coord(paint_tex_idx), 0);
+    let texel1 = textureLoad(encoded_paints_texture, encoded_paint_coord(paint_tex_idx + 1u), 0);
+    let texel2 = textureLoad(encoded_paints_texture, encoded_paint_coord(paint_tex_idx + 2u), 0);
     
     let quality = texel0.x & 0x3u;
     let extend_x = (texel0.x >> 2u) & 0x3u;
@@ -801,6 +829,11 @@ fn unpack_encoded_image(paint_tex_idx: u32) -> EncodedImage {
         bitcast<f32>(texel1.y), bitcast<f32>(texel1.z)
     );
     let translate = vec2<f32>(bitcast<f32>(texel1.w), bitcast<f32>(texel2.x));
+    // When packed_tint is zero (no tint), use identity color vec4(1.0) with
+    // Multiply mode so the math reduces to sample_color * 1.0 = sample_color.
+    let packed_tint = texel2.y;
+    let tint = select(vec4<f32>(1.0), unpack4x8unorm(packed_tint), packed_tint != 0u);
+    let tint_mode = select(TINT_MODE_MULTIPLY, texel2.z, packed_tint != 0u);
 
     return EncodedImage(
         quality, 
@@ -809,7 +842,9 @@ fn unpack_encoded_image(paint_tex_idx: u32) -> EncodedImage {
         image_offset,
         atlas_index,
         transform,
-        translate
+        translate,
+        tint,
+        tint_mode
     );
 }
 
@@ -1080,8 +1115,8 @@ struct SweepGradient {
 
 // Unpack linear gradient from the encoded paints texture.
 fn unpack_linear_gradient(paint_tex_idx: u32) -> LinearGradient {
-    let texel0 = textureLoad(encoded_paints_texture, vec2<u32>(paint_tex_idx, 0), 0);
-    let texel1 = textureLoad(encoded_paints_texture, vec2<u32>(paint_tex_idx + 1u, 0), 0);
+    let texel0 = textureLoad(encoded_paints_texture, encoded_paint_coord(paint_tex_idx), 0);
+    let texel1 = textureLoad(encoded_paints_texture, encoded_paint_coord(paint_tex_idx + 1u), 0);
     
     let texture_width_and_extend_mode = unpack_texture_width_and_extend_mode(texel0.x);
     let texture_width = texture_width_and_extend_mode.x;
@@ -1195,10 +1230,10 @@ fn calculate_radial_gradient(grad_pos: vec2<f32>, radial_gradient: RadialGradien
 
 // Unpack radial gradient from the encoded paints texture.
 fn unpack_radial_gradient(paint_tex_idx: u32) -> RadialGradient {
-    let texel0 = textureLoad(encoded_paints_texture, vec2<u32>(paint_tex_idx, 0), 0);
-    let texel1 = textureLoad(encoded_paints_texture, vec2<u32>(paint_tex_idx + 1u, 0), 0);
-    let texel2 = textureLoad(encoded_paints_texture, vec2<u32>(paint_tex_idx + 2u, 0), 0);
-    let texel3 = textureLoad(encoded_paints_texture, vec2<u32>(paint_tex_idx + 3u, 0), 0);
+    let texel0 = textureLoad(encoded_paints_texture, encoded_paint_coord(paint_tex_idx), 0);
+    let texel1 = textureLoad(encoded_paints_texture, encoded_paint_coord(paint_tex_idx + 1u), 0);
+    let texel2 = textureLoad(encoded_paints_texture, encoded_paint_coord(paint_tex_idx + 2u), 0);
+    let texel3 = textureLoad(encoded_paints_texture, encoded_paint_coord(paint_tex_idx + 3u), 0);
     
     let texture_width_and_extend_mode = unpack_texture_width_and_extend_mode(texel0.x);
     let texture_width = texture_width_and_extend_mode.x;
@@ -1229,9 +1264,9 @@ fn unpack_radial_gradient(paint_tex_idx: u32) -> RadialGradient {
 
 // Unpack sweep gradient from the encoded paints texture.
 fn unpack_sweep_gradient(paint_tex_idx: u32) -> SweepGradient {
-    let texel0 = textureLoad(encoded_paints_texture, vec2<u32>(paint_tex_idx, 0), 0);
-    let texel1 = textureLoad(encoded_paints_texture, vec2<u32>(paint_tex_idx + 1u, 0), 0);
-    let texel2 = textureLoad(encoded_paints_texture, vec2<u32>(paint_tex_idx + 2u, 0), 0);
+    let texel0 = textureLoad(encoded_paints_texture, encoded_paint_coord(paint_tex_idx), 0);
+    let texel1 = textureLoad(encoded_paints_texture, encoded_paint_coord(paint_tex_idx + 1u), 0);
+    let texel2 = textureLoad(encoded_paints_texture, encoded_paint_coord(paint_tex_idx + 2u), 0);
     
     let texture_width_and_extend_mode = unpack_texture_width_and_extend_mode(texel0.x);
     let texture_width = texture_width_and_extend_mode.x;

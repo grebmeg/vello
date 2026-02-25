@@ -6,14 +6,14 @@ pub(crate) mod multi_threaded;
 pub(crate) mod single_threaded;
 
 use crate::RenderMode;
-use crate::kurbo::{Affine, BezPath, Stroke};
+use crate::kurbo::{Affine, BezPath, Rect, Stroke};
 use crate::peniko::{BlendMode, Fill};
 use core::fmt::Debug;
 use vello_common::coarse::Wide;
 use vello_common::encode::EncodedPaint;
 use vello_common::filter_effects::Filter;
 use vello_common::mask::Mask;
-use vello_common::paint::Paint;
+use vello_common::paint::{ImageResolver, Paint};
 use vello_common::strip::Strip;
 use vello_common::strip_generator::StripStorage;
 
@@ -48,6 +48,15 @@ pub(crate) trait Dispatcher: Debug + Send + Sync {
         mask: Option<Mask>,
         encoded_paints: &[EncodedPaint],
     );
+    /// Fill a pixel-aligned rectangle with the current paint.
+    fn fill_rect_fast(
+        &mut self,
+        rect: &Rect,
+        paint: Paint,
+        blend_mode: BlendMode,
+        mask: Option<Mask>,
+        encoded_paints: &[EncodedPaint],
+    );
     fn push_clip_path(
         &mut self,
         path: &BezPath,
@@ -77,6 +86,7 @@ pub(crate) trait Dispatcher: Debug + Send + Sync {
         width: u16,
         height: u16,
         encoded_paints: &[EncodedPaint],
+        image_resolver: &dyn ImageResolver,
     );
     fn composite_at_offset(
         &self,
@@ -89,6 +99,7 @@ pub(crate) trait Dispatcher: Debug + Send + Sync {
         dst_buffer_height: u16,
         render_mode: RenderMode,
         encoded_paints: &[EncodedPaint],
+        image_resolver: &dyn ImageResolver,
     );
     fn strip_storage_mut(&mut self) -> &mut StripStorage;
 }

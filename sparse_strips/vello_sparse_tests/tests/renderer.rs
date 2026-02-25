@@ -8,7 +8,7 @@ use vello_common::filter_effects::Filter;
 use vello_common::glyph::{GlyphRenderer, GlyphRunBuilder};
 use vello_common::kurbo::{Affine, BezPath, Rect, Stroke};
 use vello_common::mask::Mask;
-use vello_common::paint::{ImageSource, PaintType};
+use vello_common::paint::{ImageId, ImageSource, PaintType, Tint};
 use vello_common::peniko::{BlendMode, Fill, FontData};
 use vello_common::pixmap::Pixmap;
 use vello_common::recording::{Recordable, Recorder, Recording};
@@ -53,6 +53,7 @@ pub(crate) trait Renderer: Sized {
     fn set_stroke(&mut self, stroke: Stroke);
     fn set_mask(&mut self, mask: Mask);
     fn set_paint(&mut self, paint: impl Into<PaintType>);
+    fn set_tint(&mut self, tint: Option<Tint>);
     fn set_paint_transform(&mut self, affine: Affine);
     fn set_fill_rule(&mut self, fill_rule: Fill);
     fn set_transform(&mut self, transform: Affine);
@@ -64,6 +65,7 @@ pub(crate) trait Renderer: Sized {
     fn width(&self) -> u16;
     fn height(&self) -> u16;
     fn get_image_source(&mut self, pixmap: Arc<Pixmap>) -> ImageSource;
+    fn register_image(&mut self, pixmap: Arc<Pixmap>) -> ImageId;
     fn record(&mut self, recording: &mut Recording, f: impl FnOnce(&mut Recorder<'_>));
     fn prepare_recording(&mut self, recording: &mut Recording);
     fn execute_recording(&mut self, recording: &Recording);
@@ -171,6 +173,10 @@ impl Renderer for RenderContext {
         Self::set_paint(self, paint);
     }
 
+    fn set_tint(&mut self, tint: Option<Tint>) {
+        Self::set_tint(self, tint);
+    }
+
     fn set_paint_transform(&mut self, affine: Affine) {
         Self::set_paint_transform(self, affine);
     }
@@ -213,6 +219,10 @@ impl Renderer for RenderContext {
 
     fn get_image_source(&mut self, pixmap: Arc<Pixmap>) -> ImageSource {
         ImageSource::Pixmap(pixmap)
+    }
+
+    fn register_image(&mut self, pixmap: Arc<Pixmap>) -> ImageId {
+        Self::register_image(self, pixmap)
     }
 
     fn record(&mut self, recording: &mut Recording, f: impl FnOnce(&mut Recorder<'_>)) {
@@ -388,6 +398,10 @@ impl Renderer for HybridRenderer {
         self.scene.set_paint(paint);
     }
 
+    fn set_tint(&mut self, tint: Option<Tint>) {
+        self.scene.set_tint(tint);
+    }
+
     fn set_paint_transform(&mut self, affine: Affine) {
         self.scene.set_paint_transform(affine);
     }
@@ -547,7 +561,26 @@ impl Renderer for HybridRenderer {
 
         self.queue.submit([encoder.finish()]);
 
-        ImageSource::OpaqueId(image_id)
+        ImageSource::opaque_id_with_opacity_hint(image_id, pixmap.may_have_opacities())
+    }
+
+    fn register_image(&mut self, pixmap: Arc<Pixmap>) -> ImageId {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Register Test Image"),
+            });
+
+        let image_id = self.renderer.borrow_mut().upload_image(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &pixmap,
+        );
+
+        self.queue.submit([encoder.finish()]);
+
+        image_id
     }
 
     fn record(&mut self, recording: &mut Recording, f: impl FnOnce(&mut Recorder<'_>)) {
@@ -703,6 +736,10 @@ impl Renderer for HybridRenderer {
         self.scene.set_paint(paint);
     }
 
+    fn set_tint(&mut self, tint: Option<Tint>) {
+        self.scene.set_tint(tint);
+    }
+
     fn set_paint_transform(&mut self, affine: Affine) {
         self.scene.set_paint_transform(affine);
     }
@@ -769,7 +806,11 @@ impl Renderer for HybridRenderer {
 
     fn get_image_source(&mut self, pixmap: Arc<Pixmap>) -> ImageSource {
         let image_id = self.renderer.borrow_mut().upload_image(&pixmap);
-        ImageSource::OpaqueId(image_id)
+        ImageSource::opaque_id_with_opacity_hint(image_id, pixmap.may_have_opacities())
+    }
+
+    fn register_image(&mut self, pixmap: Arc<Pixmap>) -> ImageId {
+        self.renderer.borrow_mut().upload_image(&pixmap)
     }
 
     fn record(&mut self, recording: &mut Recording, f: impl FnOnce(&mut Recorder<'_>)) {
