@@ -1226,6 +1226,32 @@ impl Debug for PreparedGlyphRun<'_> {
 fn prepare_glyph_run<'a>(run: GlyphRun<'a>, hint_cache: &'a mut HintCache) -> PreparedGlyphRun<'a> {
     let total_transform = run.transform * run.glyph_transform.unwrap_or(Affine::IDENTITY);
     if !run.hint {
+        // TODO: Temporary hack! Come up with a more principled solution. We probably also should
+        // disable glyph caching for non uniform scales.
+        //
+        // The current glyph caching code only takes the font size into account, but not the
+        // scaling that will be applied to the glyph as part of the transform. Therefore, we try
+        // to extract the scaling factor and absorb it into the font size.
+        let [t_a, t_b, t_c, t_d, t_e, t_f] = total_transform.as_coeffs();
+
+        let no_skew = t_b.abs() <= 1e-6 && t_c.abs() <= 1e-6;
+        let has_scale = (t_d - 1.0).abs() > 1e-6 || (t_a - 1.0).abs() > 1e-6;
+
+        if no_skew && has_scale && t_d.abs() > 1e-6 {
+            let vertical_font_size = run.font_size * t_d.abs() as f32;
+            let relative_x_scale = t_a / t_d;
+            return PreparedGlyphRun {
+                font: run.font,
+                font_size: run.font_size,
+                run_transform: run.transform,
+                glyph_transform: run.glyph_transform,
+                total_transform: Affine::new([relative_x_scale, 0., 0., 1., t_e, t_f]),
+                hinted_size: vertical_font_size,
+                normalized_coords: run.normalized_coords,
+                hinting_instance: None,
+            };
+        }
+
         return PreparedGlyphRun {
             font: run.font,
             font_size: run.font_size,
