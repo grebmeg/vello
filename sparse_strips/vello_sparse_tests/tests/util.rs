@@ -83,15 +83,18 @@ macro_rules! load_image {
         #[cfg(target_arch = "wasm32")]
         {
             let bytes = include_bytes!(concat!("../tests/assets/", $name, ".png"));
-            std::sync::Arc::new(vello_common::pixmap::Pixmap::from_png(&bytes[..]).unwrap())
+            std::sync::Arc::new(
+                vello_common::pixmap::Pixmap::from_png(std::io::Cursor::new(bytes)).unwrap(),
+            )
         }
 
         #[cfg(not(target_arch = "wasm32"))]
         {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join(format!("tests/assets/{}.png", $name));
+            let bytes = std::fs::read(path).unwrap();
             std::sync::Arc::new(
-                vello_common::pixmap::Pixmap::from_png(std::fs::File::open(path).unwrap()).unwrap(),
+                vello_common::pixmap::Pixmap::from_png(std::io::Cursor::new(bytes)).unwrap(),
             )
         }
     }};
@@ -104,6 +107,7 @@ pub(crate) fn get_ctx<T: Renderer>(
     num_threads: u16,
     level: &str,
     render_mode: RenderMode,
+    default_blending_only: bool,
 ) -> T {
     let level = match level {
         #[cfg(target_arch = "aarch64")]
@@ -142,7 +146,14 @@ pub(crate) fn get_ctx<T: Renderer>(
         _ => panic!("unknown level: {level}"),
     };
 
-    let mut ctx = T::new(width, height, num_threads, level, render_mode);
+    let mut ctx = T::new(
+        width,
+        height,
+        num_threads,
+        level,
+        render_mode,
+        default_blending_only,
+    );
 
     if !transparent {
         let path = Rect::new(0.0, 0.0, width as f64, height as f64).to_path(0.1);

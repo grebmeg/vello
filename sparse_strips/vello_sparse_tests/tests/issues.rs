@@ -4,15 +4,20 @@
 //! Tests for GitHub issues.
 
 use crate::renderer::Renderer;
+use crate::util::stops_blue_green_red_yellow;
 use std::sync::Arc;
+use vello_api::peniko::GradientKind::Radial;
 use vello_api::peniko::color::palette::css::{PURPLE, ROYAL_BLUE, TOMATO};
+use vello_api::peniko::kurbo::Point;
+use vello_api::peniko::{ColorStops, RadialGradientPosition};
 use vello_common::color::PremulRgba8;
-use vello_common::color::palette::css::{DARK_BLUE, LIME, REBECCA_PURPLE};
+use vello_common::color::palette::css::{BLUE, DARK_BLUE, LIME, REBECCA_PURPLE};
 use vello_common::filter_effects::{Filter, FilterPrimitive};
 use vello_common::kurbo::{Affine, BezPath, Rect, Shape, Stroke};
 use vello_common::paint::Image;
 use vello_common::peniko::{
-    Color, ColorStop, Fill, Gradient, ImageQuality, ImageSampler, InterpolationAlphaSpace,
+    BlendMode, Color, ColorStop, Fill, Gradient, ImageQuality, ImageSampler,
+    InterpolationAlphaSpace, Mix,
 };
 use vello_common::pixmap::Pixmap;
 use vello_cpu::color::palette::css::{BLACK, RED};
@@ -607,4 +612,87 @@ fn issue_1477(ctx: &mut impl Renderer) {
 
     ctx.set_paint(BLACK);
     ctx.fill_rect(&rect);
+}
+
+// This test exists because blending wouldn't properly preserve anti-aliasing in `vello_hybrid`.
+#[vello_test(skip_multithreaded)]
+fn issue_flush_fast_path_with_blending(ctx: &mut impl Renderer) {
+    let rect1 = Rect::new(10.5, 10.5, 70.5, 70.5);
+    ctx.set_paint(BLUE.with_alpha(0.5));
+    ctx.fill_rect(&rect1);
+    ctx.push_blend_layer(BlendMode::new(Mix::SoftLight, Compose::SrcOver));
+    let rect2 = Rect::new(30.5, 30.5, 90.5, 90.5);
+    ctx.set_paint(LIME.with_alpha(0.5));
+    ctx.fill_rect(&rect2);
+    ctx.pop_layer();
+}
+
+// This tests an issue where the rectangle fast path could produce strips below the viewport,
+// resulting in a triggered assertion in later parts of the pipeline that assume everything
+// below the viewport has been culled away.
+#[vello_test(width = 100, height = 100, no_ref)]
+fn issue_rect_at_bottom_of_viewport(ctx: &mut impl Renderer) {
+    ctx.set_transform(Affine::IDENTITY);
+    ctx.fill_rect(&Rect::new(25.0, 101.0, 200.0, 130.0));
+}
+
+#[vello_test]
+fn issue_1528(ctx: &mut impl Renderer) {
+    use smallvec::smallvec;
+    use vello_common::color::{DynamicColor, palette::css::PURPLE};
+
+    // 1) This first draw op will put the gradient into the cache.
+    let grad1 = Gradient {
+        kind: Radial(RadialGradientPosition {
+            start_center: Point::new(-200.0, -200.0),
+            start_radius: 5.0,
+            end_center: Point::new(-200.0, -200.0),
+            end_radius: 35.0,
+        }),
+        stops: stops_blue_green_red_yellow(),
+        ..Default::default()
+    };
+    ctx.set_paint(grad1);
+    ctx.fill_rect(&Rect::new(-250.0, -250.0, -150.0, -150.0));
+
+    // 2) This second draw op should _not_ result in a cache hit, because the gradient
+    // can have undefined locations. Therefore, a different LUT will be generated which adds a
+    // final transparent stop. Therefore, this gradient must be treated differently
+    // than the first one.
+    let grad2 = Gradient {
+        kind: Radial(RadialGradientPosition {
+            start_center: Point::new(30.0, 50.0),
+            start_radius: 5.0,
+            end_center: Point::new(70.0, 50.0),
+            end_radius: 20.0,
+        }),
+        stops: stops_blue_green_red_yellow(),
+        ..Default::default()
+    };
+    ctx.set_paint(grad2);
+    ctx.fill_rect(&Rect::new(10.0, 10.0, 90.0, 90.0));
+
+    // 3) In case 2) was not fulfilled, the transparent pixel will instead land on the first
+    // LUT entry of this gradient, which is purple.
+    let grad3 = Gradient {
+        kind: Radial(RadialGradientPosition {
+            start_center: Point::new(-200.0, -200.0),
+            start_radius: 5.0,
+            end_center: Point::new(-200.0, -200.0),
+            end_radius: 35.0,
+        }),
+        stops: ColorStops(smallvec![
+            ColorStop {
+                offset: 0.0,
+                color: DynamicColor::from_alpha_color(PURPLE)
+            },
+            ColorStop {
+                offset: 1.0,
+                color: DynamicColor::from_alpha_color(PURPLE)
+            },
+        ]),
+        ..Default::default()
+    };
+    ctx.set_paint(grad3);
+    ctx.fill_rect(&Rect::new(-250.0, -250.0, -150.0, -150.0));
 }

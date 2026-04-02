@@ -13,7 +13,7 @@ use vello_common::peniko::{BlendMode, Fill, FontData};
 use vello_common::pixmap::Pixmap;
 use vello_common::recording::{Recordable, Recorder, Recording};
 use vello_cpu::{Level, RenderContext, RenderMode, RenderSettings};
-use vello_hybrid::Scene;
+use vello_hybrid::{RenderSettings as HybridRenderSettings, Scene, SceneConstraints};
 #[cfg(all(target_arch = "wasm32", feature = "webgl"))]
 use web_sys::WebGl2RenderingContext;
 
@@ -26,6 +26,7 @@ pub(crate) trait Renderer: Sized {
         num_threads: u16,
         level: Level,
         render_mode: RenderMode,
+        default_blending_only: bool,
     ) -> Self;
     fn fill_path(&mut self, path: &BezPath);
     fn stroke_path(&mut self, path: &BezPath);
@@ -80,6 +81,7 @@ impl Renderer for RenderContext {
         num_threads: u16,
         level: Level,
         render_mode: RenderMode,
+        _default_blending_only: bool,
     ) -> Self {
         let settings = RenderSettings {
             level,
@@ -249,19 +251,9 @@ pub(crate) struct HybridRenderer {
 }
 
 #[cfg(not(all(target_arch = "wasm32", feature = "webgl")))]
-impl Renderer for HybridRenderer {
-    type GlyphRenderer = Scene;
-
-    fn new(width: u16, height: u16, num_threads: u16, level: Level, _: RenderMode) -> Self {
-        if num_threads != 0 {
-            panic!("hybrid renderer doesn't support multi-threading");
-        }
-
-        if !level.is_fallback() {
-            panic!("hybrid renderer doesn't support SIMD");
-        }
-
-        let scene = Scene::new(width, height);
+impl HybridRenderer {
+    fn new_with_settings(width: u16, height: u16, settings: HybridRenderSettings) -> Self {
+        let scene = Scene::new_with(width, height, settings);
         // Initialize wgpu device and queue for GPU rendering
         let instance = wgpu::Instance::default();
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -313,6 +305,32 @@ impl Renderer for HybridRenderer {
             texture_view,
             renderer: RefCell::new(renderer),
         }
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", feature = "webgl")))]
+impl Renderer for HybridRenderer {
+    type GlyphRenderer = Scene;
+
+    fn new(
+        width: u16,
+        height: u16,
+        num_threads: u16,
+        level: Level,
+        _: RenderMode,
+        default_blending_only: bool,
+    ) -> Self {
+        if num_threads != 0 {
+            panic!("hybrid renderer doesn't support multi-threading");
+        }
+        if !level.is_fallback() {
+            panic!("hybrid renderer doesn't support SIMD");
+        }
+        let mut settings = HybridRenderSettings::default();
+        if default_blending_only {
+            settings.constraints = SceneConstraints::new().default_blending_only();
+        }
+        Self::new_with_settings(width, height, settings)
     }
 
     fn fill_path(&mut self, path: &BezPath) {
@@ -607,7 +625,14 @@ pub(crate) struct HybridRenderer {
 impl Renderer for HybridRenderer {
     type GlyphRenderer = Scene;
 
-    fn new(width: u16, height: u16, num_threads: u16, level: Level, _: RenderMode) -> Self {
+    fn new(
+        width: u16,
+        height: u16,
+        num_threads: u16,
+        level: Level,
+        _: RenderMode,
+        default_blending_only: bool,
+    ) -> Self {
         use wasm_bindgen::JsCast;
         use web_sys::HtmlCanvasElement;
 
@@ -619,7 +644,11 @@ impl Renderer for HybridRenderer {
             panic!("hybrid renderer doesn't support SIMD");
         }
 
-        let scene = Scene::new(width, height);
+        let mut settings = HybridRenderSettings::default();
+        if default_blending_only {
+            settings.constraints = SceneConstraints::new().default_blending_only();
+        }
+        let scene = Scene::new_with(width, height, settings);
 
         // Create an offscreen HTMLCanvasElement, render the test image to it, and finally read off
         // the pixmap for diff checking.
@@ -792,6 +821,15 @@ impl Renderer for HybridRenderer {
                 Some(&mut pixels),
             )
             .unwrap();
+
+        // WebGL framebuffers are y-up, so we need to invert the rows.
+        let row_bytes = width as usize * 4;
+        let height = height as usize;
+        for y in 0..height / 2 {
+            let (a, b) = pixels.split_at_mut((height - 1 - y) * row_bytes);
+            a[y * row_bytes..(y + 1) * row_bytes].swap_with_slice(&mut b[..row_bytes]);
+        }
+
         let pixmap_data = pixmap.data_as_u8_slice_mut();
         pixmap_data.copy_from_slice(&pixels);
     }

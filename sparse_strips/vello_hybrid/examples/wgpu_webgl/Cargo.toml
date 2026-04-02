@@ -38,4 +38,4 @@ web-sys = { version = "0.3.74", features = [
 wgpu = { workspace = true, default-features = true, features = ["webgpu"] }
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.56"
+wasm-bindgen-test = "0.3.64"

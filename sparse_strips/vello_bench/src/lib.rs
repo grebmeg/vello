@@ -7,12 +7,14 @@
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
+pub mod allocator;
 pub mod coarse;
 pub mod data;
 pub mod fine;
 pub mod flatten;
 pub mod glyph;
 pub mod integration;
+pub mod sort;
 pub mod strip;
 pub mod tile;
 

@@ -18,6 +18,10 @@ pub(crate) const GPU_RADIAL_GRADIENT_SIZE_TEXELS: u32 =
     (size_of::<GpuRadialGradient>() / 16) as u32;
 pub(crate) const GPU_SWEEP_GRADIENT_SIZE_TEXELS: u32 = (size_of::<GpuSweepGradient>() / 16) as u32;
 
+// TODO: If we want to use native bilinear sampling for uploaded images,
+// we can pass 1 instead of 0 here.
+pub(crate) const IMAGE_PADDING: u16 = 0;
+
 /// Dimensions of the rendering target.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RenderSize {
@@ -43,11 +47,32 @@ pub struct Config {
     /// Number of trailing zeros in the encoded paints texture width (log2 of width).
     /// Pre-calculated on CPU since downlevel targets do not support `firstTrailingBit`.
     pub encoded_paints_tex_width_bits: u32,
-    /// Padding to satisfy WebGL's 16-byte alignment requirement for uniform buffers.
-    pub _padding: [u32; 3],
+    /// A horizontal offset to apply to strips.
+    pub strip_offset_x: i32,
+    /// A vertical offset to apply to strips.
+    pub strip_offset_y: i32,
+    /// Whether to flip the y-component of the NDC position.
+    ///
+    /// When transpiling a shader with naga, it applies a y-flip transform when
+    /// compiling to GLSL to account for the difference between the y-down
+    /// coordinate of WebGPU and the y-up coordinate system of WebGL framebuffers.
+    ///
+    /// However, for the native WebGL backend, we want to _avoid_ this transform so that we
+    /// can write directly into the user-provided framebuffer, but still ensure that the scene
+    /// is correctly flipped. Otherwise, we would need to allocate another framebuffer,
+    /// render into that and then pay the cost for flipping it.
+    ///
+    /// Therefore, we optionally negate the coordinates in NDC.
+    /// (Note that naga provides a flag for disabling this behavior. However, the problem
+    /// is that many parts of Vello Hybrid's code (such as slot textures) also assume a
+    /// y-down coordinate system. Therefore, just disabling this flag causes complications in
+    /// other places. From my experiments, it's much easier to enable the flag by default
+    /// and just apply the second negation manually in case we render to the final output surface
+    /// in the WebGL backend.
+    pub negate_ndc: u32,
 }
 
-/// Represents a GPU strip for rendering.
+/// A GPU strip instance for rendering.
 ///
 /// This struct corresponds to the `StripInstance` struct in the shader.
 /// See the `StripInstance` documentation in `render_strips.wgsl` for detailed field descriptions.
@@ -58,16 +83,16 @@ pub struct GpuStrip {
     pub x: u16,
     /// See `StripInstance::xy` documentation in `render_strips.wgsl`.
     pub y: u16,
-    /// See `StripInstance::widths` documentation in `render_strips.wgsl`.
+    /// See `StripInstance::dense_width_or_rect_height` documentation in `render_strips.wgsl`.
     pub width: u16,
-    /// See `StripInstance::widths` documentation in `render_strips.wgsl`.
-    pub dense_width: u16,
-    /// See `StripInstance::col_idx` documentation in `render_strips.wgsl`.
-    pub col_idx: u32,
+    /// See `StripInstance::dense_width_or_rect_height` documentation in `render_strips.wgsl`.
+    pub dense_width_or_rect_height: u16,
+    /// See `StripInstance::col_idx_or_rect_frac` documentation in `render_strips.wgsl`.
+    pub col_idx_or_rect_frac: u32,
     /// See `StripInstance::payload` documentation in `render_strips.wgsl`.
     pub payload: u32,
-    /// See `StripInstance::paint` documentation in `render_strips.wgsl`.
-    pub paint: u32,
+    /// See `StripInstance::paint_and_rect_flag` documentation in `render_strips.wgsl`.
+    pub paint_and_rect_flag: u32,
 }
 
 /// Different types of GPU encoded paints.
@@ -130,8 +155,8 @@ pub(crate) struct GpuEncodedImage {
     pub tint: u32,
     /// [`TintMode`](vello_common::paint::TintMode) discriminant. Only meaningful when `tint != 0`.
     pub tint_mode: u32,
-    /// Padding for 16-byte alignment.
-    pub _padding: u32,
+    /// Number of transparent padding pixels around the image in the atlas.
+    pub image_padding: u32,
 }
 
 /// GPU encoded linear gradient data.
