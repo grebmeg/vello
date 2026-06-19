@@ -60,14 +60,17 @@ env:
 name: CI
 
 on:
-  pull_request:
-  merge_group:
-  # We run on push, even though the commit is the same as when we ran in merge_group.
-  # This allows the cache to be primed.
-  # See https://github.com/orgs/community/discussions/66430
-  push:
-    branches:
-      - main
+  # Temporarily disabled while testing the CodSpeed workflow in a fork.
+  # To re-enable, restore the pull_request / merge_group / push triggers below.
+  workflow_dispatch:
+  # pull_request:
+  # merge_group:
+  # # We run on push, even though the commit is the same as when we ran in merge_group.
+  # # This allows the cache to be primed.
+  # # See https://github.com/orgs/community/discussions/66430
+  # push:
+  #   branches:
+  #     - main
 
 # Cancel superseded CI runs for the same PR to save runner time.
 concurrency:

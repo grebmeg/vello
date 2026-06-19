@@ -13,7 +13,11 @@ publish = false
 vello_common = { workspace = true }
 vello_cpu = { workspace = true }
 vello_dev_macros = { workspace = true }
+vello_example_scenes = { workspace = true, features = ["cpu"] }
 criterion = { workspace = true }
+# Drop-in Criterion replacement used only by the `scenes` bench so CodSpeed can instrument it.
+# It is a passthrough to Criterion when not running under `cargo codspeed`.
+codspeed-criterion-compat = "4.7.0"
 image = { workspace = true, features = ["jpeg"] }
 parley = { version = "0.9.0", default-features = true }
 rand = { workspace = true, features = ["small_rng"] }
@@ -24,6 +28,11 @@ usvg = { workspace = true }
 
 [[bench]]
 name = "main"
+harness = false
+
+# Scene-level performance regression benchmarks tracked by CodSpeed.
+[[bench]]
+name = "scenes"
 harness = false
 
 [lints]
