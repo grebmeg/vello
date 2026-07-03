@@ -1,9 +1,12 @@
 name: Web Demo Update
 
 on:
-  push:
-    branches:
-      - main
+  # Temporarily disabled while testing the CodSpeed workflow in a fork.
+  # To re-enable, restore the push trigger below.
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #     - main
 
 jobs:
   release-web:

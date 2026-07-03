@@ -11,6 +11,7 @@ pub mod filter;
 pub mod filter_elements;
 pub mod gradient;
 pub mod image;
+pub mod mixed;
 pub mod multi_image;
 pub mod path;
 pub mod random_text;
@@ -490,6 +491,7 @@ where
     scenes.push(AnyScene::new(emoji_grid::EmojiGridScene::new()));
     scenes.push(AnyScene::new(random_text::RandomTextScene::new()));
     scenes.push(AnyScene::new(simple::SimpleScene::new()));
+    scenes.push(AnyScene::new(mixed::MixedScene::new()));
     scenes.push(AnyScene::new(
         blurred_rounded_rect::BlurredRoundedRectScene::new(),
     ));
@@ -534,6 +536,7 @@ where
         AnyScene::new(emoji_grid::EmojiGridScene::new()),
         AnyScene::new(random_text::RandomTextScene::new()),
         AnyScene::new(simple::SimpleScene::new()),
+        AnyScene::new(mixed::MixedScene::new()),
         AnyScene::new(blurred_rounded_rect::BlurredRoundedRectScene::new()),
         AnyScene::new(filter::FilterScene::new()),
         AnyScene::new(clip::ClipScene::new()),
