@@ -17,7 +17,7 @@ Vello is a Rust **Cargo workspace** (a 2D vector-graphics rendering engine). The
 - The CPU-only crates (`vello_cpu`, `vello_common`, `glifo`) need no GPU and no env vars.
 
 ### Tests
-- Snapshot tests compare against reference PNGs stored in **git LFS** (`vello_tests/snapshots/*.png`, `sparse_strips/vello_sparse_tests/snapshots/*.png`). Run `git lfs pull` to materialize them. After `git lfs pull`, `git status` may list these PNGs as "modified" — this is a git-lfs smudge quirk; **do not commit them**. If LFS is unavailable, set `VELLO_SKIP_LFS_SNAPSHOTS=all` to skip those tests.
+- Snapshot tests compare against reference images stored in **git LFS** (`vello_tests/snapshots/*.png`, `sparse_strips/vello_sparse_tests/snapshots/*.png`). Run `git lfs pull` to materialize them. After `git lfs pull`, `git status` may list these `.png` files as "modified" — this is a git-lfs smudge quirk; **do not commit them**. If LFS is unavailable, set `VELLO_SKIP_LFS_SNAPSHOTS=all` to skip those tests.
 - Tests use `cargo nextest` (installed) and are run `--release` because CPU shaders are extremely slow unoptimized (see `ci.yml`). Doc tests still use `cargo test --doc` (nextest can't run them).
 
 ### Quick reference (run from repo root)
