@@ -111,6 +111,11 @@ jobs:
         with:
           tool: cargo-rdme
 
+      # cargo-rdme needs a specific nightly toolchain to resolve intra-doc links.
+      # This installs whichever nightly the installed cargo-rdme version requires.
+      - name: Install nightly toolchain for cargo-rdme intralinks
+        run: cargo rdme install-rust-toolchain-for-intralinks
+
       - name: Run cargo rdme (vello_cpu)
         run: cargo rdme --check --workspace-project=vello_cpu
 
