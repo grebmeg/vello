@@ -96,7 +96,7 @@ to better understand how to interact with Vello CPU's API,
 - `std` (enabled by default): Get floating point functions from the standard library
   (likely using your target's libc).
 - `libm`: Use floating point implementations from [libm][].
-- `png`(enabled by default): Allow loading [`Pixmap`]s from PNG images.
+- `png`(enabled by default): Allow loading [`Pixmap`](https://docs.rs/vello_common/latest/vello_common/pixmap/struct.Pixmap.html)s from PNG images.
   Also required for rendering glyphs with an embedded PNG. Implies `std`.
 - `multithreading`: Enable multi-threaded rendering. Implies `std`.
 - `text` (enabled by default): Enables glyph rendering ([`glyph_run`][RenderContext::glyph_run]).
