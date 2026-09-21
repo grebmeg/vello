@@ -3,7 +3,7 @@ name: Web Demo Update
 on:
   push:
     branches:
-      - main
+      - cursor/test-web-demo-pages
 
 jobs:
   release-web:
