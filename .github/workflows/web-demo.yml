@@ -3,7 +3,7 @@ name: Web Demo Update
 on:
   push:
     branches:
-      - main
+      - cursor/test-webgpu-pages
 
 jobs:
   release-web:
