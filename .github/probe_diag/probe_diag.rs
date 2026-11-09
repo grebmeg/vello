@@ -67,16 +67,57 @@ async fn wait_for_animation_frame() {
     JsFuture::from(promise).await.unwrap();
 }
 
+/// Mirrors `PlatformCanvas::begin_hybrid_context` in Canva's renderer.
+fn canva_settings() -> vello_gpu::RenderSettings {
+    use vello_gpu::{AllocationStrategy, AtlasConfig, LayersConfig, MemorySettings, SizeU16};
+    vello_gpu::RenderSettings::default().with_memory_settings(MemorySettings {
+        image_atlas_config: AtlasConfig {
+            initial_atlas_count: 1,
+            max_atlases: 8,
+            atlas_size: (4096, 4096),
+            auto_grow: true,
+            allocation_strategy: AllocationStrategy::FirstFit,
+        },
+        layers_config: LayersConfig {
+            max_textures: Some(3),
+            min_texture_size: SizeU16::new(512),
+            max_texture_size: SizeU16::new(4096),
+        },
+    })
+}
+
+async fn canva_renderer(depth: bool) -> Result<vello_gpu::WebGlRenderer, String> {
+    use vello_gpu::WebGlRendererInitStatus;
+    let (mut init, _) = vello_gpu::WebGlRenderer::begin_with(&canvas(), canva_settings(), depth)
+        .map_err(|e| format!("begin_with failed: {e:?}"))?;
+    for _ in 0..600 {
+        match init.try_finish().map_err(|e| format!("init failed: {e:?}"))? {
+            WebGlRendererInitStatus::Complete(renderer) => return Ok(renderer),
+            WebGlRendererInitStatus::Pending(next) => {
+                init = next;
+                wait_for_animation_frame().await;
+            }
+        }
+    }
+    Err("init timed out".into())
+}
+
 async fn run(report: &mut String, label: &str, elements: &[ProbeFeature], depth: bool) {
     let _ = writeln!(report, "\n=== {label} (depth={depth}) ===");
-    let (mut renderer, _) =
-        match vello_gpu::WebGlRenderer::new_with(&canvas(), vello_gpu::RenderSettings::default(), depth) {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = writeln!(report, "renderer creation failed: {e:?}");
-                return;
-            }
-        };
+    let created = if label.starts_with("canva config") {
+        canva_renderer(depth).await
+    } else {
+        vello_gpu::WebGlRenderer::new_with(&canvas(), vello_gpu::RenderSettings::default(), depth)
+            .map(|(r, _)| r)
+            .map_err(|e| format!("{e:?}"))
+    };
+    let mut renderer = match created {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = writeln!(report, "renderer creation failed: {e}");
+            return;
+        }
+    };
     let mut pending = match renderer.probe(elements) {
         Ok(p) => p,
         Err(e) => {
@@ -142,6 +183,9 @@ async fn probe_diag_report() {
     run(&mut report, "filter only", &[ProbeFeature::Filter], false).await;
     run(&mut report, "drop shadow only", &[ProbeFeature::DropShadow], true).await;
     run(&mut report, "canva elements", CANVA_ELEMENTS, true).await;
+    run(&mut report, "canva config, canva elements", CANVA_ELEMENTS, true).await;
+    run(&mut report, "canva config, canva elements", CANVA_ELEMENTS, false).await;
+    run(&mut report, "canva config, filter only", &[ProbeFeature::Filter], true).await;
     run(&mut report, "all elements", ALL_PROBE_ELEMENTS, true).await;
     panic!("probe diagnostics report:\n{report}");
 }
