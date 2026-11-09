@@ -68,26 +68,38 @@ jobs:
       - name: probe (ANGLE d3d11)
         continue-on-error: true
         timeout-minutes: 15
+        shell: pwsh
+        env:
+          CHROME_ARGS: '"--use-angle=d3d11","--ignore-gpu-blocklist"'
         run: |
-          export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver.exe"
-          export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$RUNNER_TEMP/wd.json"
-          echo '{"timeouts":{"pageLoad":1200000,"script":1200000},"goog:chromeOptions":{"args":["--use-angle=d3d11","--ignore-gpu-blocklist"]}}' > "$WASM_BINDGEN_TEST_WEBDRIVER_JSON"
-          $TEST_CMD -- probe_diag
+          $env:CHROMEDRIVER = Join-Path $env:CHROMEWEBDRIVER 'chromedriver.exe'
+          $env:WASM_BINDGEN_TEST_WEBDRIVER_JSON = Join-Path $env:RUNNER_TEMP 'wd.json'
+          Set-Content $env:WASM_BINDGEN_TEST_WEBDRIVER_JSON ('{"timeouts":{"pageLoad":1200000,"script":1200000},"goog:chromeOptions":{"args":[' + $env:CHROME_ARGS + ']}}')
+          Get-Content $env:WASM_BINDGEN_TEST_WEBDRIVER_JSON
+          cargo test -p vello_tests --target wasm32-unknown-unknown --features webgl --release --test tests -- probe_diag
 
       - name: probe (ANGLE d3d11-warp)
         continue-on-error: true
         timeout-minutes: 15
+        shell: pwsh
+        env:
+          CHROME_ARGS: '"--use-angle=d3d11-warp","--ignore-gpu-blocklist"'
         run: |
-          export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver.exe"
-          export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$RUNNER_TEMP/wd.json"
-          echo '{"timeouts":{"pageLoad":1200000,"script":1200000},"goog:chromeOptions":{"args":["--use-angle=d3d11-warp","--ignore-gpu-blocklist"]}}' > "$WASM_BINDGEN_TEST_WEBDRIVER_JSON"
-          $TEST_CMD -- probe_diag
+          $env:CHROMEDRIVER = Join-Path $env:CHROMEWEBDRIVER 'chromedriver.exe'
+          $env:WASM_BINDGEN_TEST_WEBDRIVER_JSON = Join-Path $env:RUNNER_TEMP 'wd.json'
+          Set-Content $env:WASM_BINDGEN_TEST_WEBDRIVER_JSON ('{"timeouts":{"pageLoad":1200000,"script":1200000},"goog:chromeOptions":{"args":[' + $env:CHROME_ARGS + ']}}')
+          Get-Content $env:WASM_BINDGEN_TEST_WEBDRIVER_JSON
+          cargo test -p vello_tests --target wasm32-unknown-unknown --features webgl --release --test tests -- probe_diag
 
       - name: probe (ANGLE swiftshader, control)
         continue-on-error: true
         timeout-minutes: 15
+        shell: pwsh
+        env:
+          CHROME_ARGS: '"--use-angle=swiftshader","--enable-unsafe-swiftshader"'
         run: |
-          export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver.exe"
-          export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$RUNNER_TEMP/wd.json"
-          echo '{"timeouts":{"pageLoad":1200000,"script":1200000},"goog:chromeOptions":{"args":["--use-angle=swiftshader","--enable-unsafe-swiftshader"]}}' > "$WASM_BINDGEN_TEST_WEBDRIVER_JSON"
-          $TEST_CMD -- probe_diag
+          $env:CHROMEDRIVER = Join-Path $env:CHROMEWEBDRIVER 'chromedriver.exe'
+          $env:WASM_BINDGEN_TEST_WEBDRIVER_JSON = Join-Path $env:RUNNER_TEMP 'wd.json'
+          Set-Content $env:WASM_BINDGEN_TEST_WEBDRIVER_JSON ('{"timeouts":{"pageLoad":1200000,"script":1200000},"goog:chromeOptions":{"args":[' + $env:CHROME_ARGS + ']}}')
+          Get-Content $env:WASM_BINDGEN_TEST_WEBDRIVER_JSON
+          cargo test -p vello_tests --target wasm32-unknown-unknown --features webgl --release --test tests -- probe_diag
