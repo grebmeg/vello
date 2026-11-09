@@ -59,12 +59,15 @@ jobs:
         run: $TEST_CMD --no-run
 
       - name: chrome version
+        timeout-minutes: 2
+        shell: pwsh
         run: |
-          "/c/Program Files/Google/Chrome/Application/chrome.exe" --version || true
-          "$CHROMEWEBDRIVER/chromedriver.exe" --version
+          (Get-Item "C:\Program Files\Google\Chrome\Application\chrome.exe").VersionInfo.ProductVersion
+          & "$env:CHROMEWEBDRIVER\chromedriver.exe" --version
 
       - name: probe (ANGLE d3d11)
         continue-on-error: true
+        timeout-minutes: 15
         run: |
           export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver.exe"
           export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$RUNNER_TEMP/wd.json"
@@ -73,6 +76,7 @@ jobs:
 
       - name: probe (ANGLE d3d11-warp)
         continue-on-error: true
+        timeout-minutes: 15
         run: |
           export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver.exe"
           export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$RUNNER_TEMP/wd.json"
@@ -81,6 +85,7 @@ jobs:
 
       - name: probe (ANGLE swiftshader, control)
         continue-on-error: true
+        timeout-minutes: 15
         run: |
           export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver.exe"
           export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$RUNNER_TEMP/wd.json"
