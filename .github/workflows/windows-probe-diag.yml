@@ -1,0 +1,88 @@
+# Temporary: reproduce the Vello Hybrid WebGL probe "Filter" mismatch on Windows (ANGLE D3D11).
+name: windows probe diag
+
+on:
+  push:
+    branches:
+      - diag/windows-webgl-probe
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: probe @ ${{ matrix.label }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: before-1997
+            ref: 72c2fb0628dc6f4bbc7eaf3375284be89be03a06
+          - label: "1997"
+            ref: 964ebdb88efd40a8ceda420f40dc810180328480
+          - label: canva-pin
+            ref: a5a8df3aea024f305fd92e421b20d5e0e4fd3df8
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+      WASM_BINDGEN_TEST_TIMEOUT: "600"
+      TEST_CMD: cargo test -p vello_tests --target wasm32-unknown-unknown --features webgl --release --test tests
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.ref }}
+
+      - uses: actions/checkout@v6
+        with:
+          path: diag-src
+
+      - name: overlay diagnostic test
+        run: |
+          cp diag-src/.github/probe_diag/probe_diag.rs vello_tests/tests/probe_diag.rs
+          printf '\n#[cfg(all(target_arch = "wasm32", feature = "webgl"))]\nmod probe_diag;\n' >> vello_tests/tests/mod.rs
+          rm -rf diag-src
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.label }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.115
+
+      - name: build
+        run: $TEST_CMD --no-run
+
+      - name: chrome version
+        run: |
+          "/c/Program Files/Google/Chrome/Application/chrome.exe" --version || true
+          "$CHROMEWEBDRIVER/chromedriver.exe" --version
+
+      - name: probe (ANGLE d3d11)
+        continue-on-error: true
+        run: |
+          export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver.exe"
+          export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$RUNNER_TEMP/wd.json"
+          echo '{"timeouts":{"pageLoad":1200000,"script":1200000},"goog:chromeOptions":{"args":["--use-angle=d3d11","--ignore-gpu-blocklist"]}}' > "$WASM_BINDGEN_TEST_WEBDRIVER_JSON"
+          $TEST_CMD -- probe_diag
+
+      - name: probe (ANGLE d3d11-warp)
+        continue-on-error: true
+        run: |
+          export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver.exe"
+          export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$RUNNER_TEMP/wd.json"
+          echo '{"timeouts":{"pageLoad":1200000,"script":1200000},"goog:chromeOptions":{"args":["--use-angle=d3d11-warp","--ignore-gpu-blocklist"]}}' > "$WASM_BINDGEN_TEST_WEBDRIVER_JSON"
+          $TEST_CMD -- probe_diag
+
+      - name: probe (ANGLE swiftshader, control)
+        continue-on-error: true
+        run: |
+          export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver.exe"
+          export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$RUNNER_TEMP/wd.json"
+          echo '{"timeouts":{"pageLoad":1200000,"script":1200000},"goog:chromeOptions":{"args":["--use-angle=swiftshader","--enable-unsafe-swiftshader"]}}' > "$WASM_BINDGEN_TEST_WEBDRIVER_JSON"
+          $TEST_CMD -- probe_diag
